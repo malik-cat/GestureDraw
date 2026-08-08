@@ -19,6 +19,7 @@ py-modules = [
     "hand_tracker",
     "shapes",
     "main",
+    "gesture_draw_v2",
 ]
 
 [tool.setuptools.packages.find]

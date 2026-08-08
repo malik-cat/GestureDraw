@@ -1,3 +1,15 @@
+# GestureDraw v2 — runtime dependencies
+# -------------------------------------
+# The v2 single-file build (gesture_draw_v2.py) and the modular v1 app
+# (main.py) share the same requirements.
+#
+#   pip install -r requirements.txt
+#   python gesture_draw_v2.py          # v2 all-in-one build
+#   python main.py                     # v1 modular build
+#
+# mediapipe >= 1.0.0 uses the Tasks API only; legacy ``mp.solutions`` was
+# removed in 1.0.0, so do NOT downgrade below it.
+
 opencv-python>=4.8
 numpy>=1.24
 mediapipe>=1.0.0

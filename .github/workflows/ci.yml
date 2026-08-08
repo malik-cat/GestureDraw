@@ -31,4 +31,4 @@ jobs:
         run: python -m pytest tests/ -v
 
       - name: Verify all modules compile
-        run: python -m py_compile config.py hand_tracker.py canvas.py frame_capture.py main.py shapes.py
+        run: python -m py_compile config.py hand_tracker.py canvas.py frame_capture.py main.py shapes.py gesture_draw_v2.py

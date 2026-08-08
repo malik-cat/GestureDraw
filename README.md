@@ -82,13 +82,22 @@ pip install -r requirements.txt
 
 ### 3. Run it
 
+Run the **v2 production build** (single-file, recommended):
+
+```bash
+python gesture_draw_v2.py
+```
+
+Or the **v1 modular build**:
+
 ```bash
 python main.py
 ```
 
-A window titled **GestureDraw – Air Canvas** opens showing your mirrored
-webcam feed with the palette and sidebar. Raise your hand and start drawing.
-Press `q` to quit.
+The v2 window **GestureDraw v2 – Air Canvas** opens with a redesigned header
+toolbar (`BLUE` `GREEN` `RED` `ERASER` `CLEAR ALL`), a live FPS meter, and
+interpolated stroke drawing for lag-free, gap-free lines. Raise your hand
+and start drawing; press `q` to quit.
 
 > **Model file:** if `hand_landmarker.task` is missing, download it from
 > [Google's MediaPipe models](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task)
@@ -133,6 +142,43 @@ DRAW   UNDO    SAVE    BRUSH+  BRUSH−
 
 `DRAW` (in the list above) or `0` on the keyboard returns to free-hand
 sketching; the shape tool stays selected so you can draw several in a row.
+
+---
+
+## 🚀 The v2 Production Build (`gesture_draw_v2.py`)
+
+A single-file, production-tuned implementation addressing the reported
+"broken lines" and "unresponsive toolbar" issues:
+
+**Phase 1 — Smooth, continuous lines**
+- `HandLandmarker` confidence raised to **0.8/0.8** (`min_detection_confidence`,
+  `min_tracking_confidence`) so brief occlusion no longer drops the hand.
+- The tracker runs in **VIDEO mode** (frame-to-frame tracking) instead of a
+  full re-detect every frame, offsetting the confidence latency.
+- **Line interpolation** — the previous fingertip `(xp, yp)` is connected to
+  the current `(xc, yc)` with `cv2.line()` every frame. A single skipped
+  frame now *continues* the stroke instead of cracking it into dots.
+- **FPS meter** in the corner + pacing that caps the loop at `TARGET_FPS`
+  (30) for a steady, professional feel.
+
+**Phase 2 — Clear, reliable toolbar**
+- Header redesigned over y = 0..100 with labelled buttons
+  `[BLUE] [GREEN] [RED] [ERASER] [CLEAR ALL]`; the active tool is outlined
+  in thick yellow.
+- **Stable selection** — a tool only fires after the cursor hovers it for
+  `STABLE_HOVER_FRAMES` (15 ≈ 0.5 s) consecutive frames **or** a pinch-click
+  fires inside the header (pinch is preferred for accuracy).
+
+**Phase 3 — Precise gestures**
+- `DRAW`: index tip clearly above its PIP while the middle is folded (pen =
+  landmark 8).
+- `SELECT/HOVER`: index **and** middle extended → cursor is the midpoint of
+  landmarks 8 and 12 (stable two-finger cursor).
+- `CLICK`: thumb (4) + index (8) pinch ratio below `PINCH_ON_RATIO`,
+  normalised by hand size, only honoured inside the header strip.
+
+All v2 pure logic is unit-tested in `tests/test_gesture_draw_v2.py`
+(camera-free).
 
 ---
 
