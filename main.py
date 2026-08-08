@@ -19,7 +19,6 @@ Responsibilities (this phase)
                          explicitly saves/export.
 """
 
-import os
 from datetime import datetime
 
 import cv2
@@ -27,7 +26,7 @@ import cv2
 import config
 from canvas import Canvas, Palette, Sidebar
 from frame_capture import FrameSource
-from hand_tracker import HandTracker, Gesture
+from hand_tracker import Gesture, HandTracker
 
 
 class AirCanvasApp:
@@ -57,15 +56,19 @@ class AirCanvasApp:
     def apply_tool(self, tool):
         """Apply any tool/action id (palette, sidebar, keyboard)."""
         if tool == config.TOOL_RED:
-            self.canvas.set_color(config.COLOR_RED);   self.tool = tool
+            self.canvas.set_color(config.COLOR_RED)
+            self.tool = tool
         elif tool == config.TOOL_GREEN:
-            self.canvas.set_color(config.COLOR_GREEN); self.tool = tool
+            self.canvas.set_color(config.COLOR_GREEN)
+            self.tool = tool
         elif tool == config.TOOL_BLUE:
-            self.canvas.set_color(config.COLOR_BLUE);  self.tool = tool
+            self.canvas.set_color(config.COLOR_BLUE)
+            self.tool = tool
         elif tool == config.TOOL_ERASER:
             self.tool = tool
         elif tool == config.TOOL_CLEAR:
-            self.canvas.clear(); self.tool = tool
+            self.canvas.clear()
+            self.tool = tool
         elif tool == "undo":
             self.canvas.undo()
         elif tool == "redo":
@@ -135,7 +138,8 @@ class AirCanvasApp:
             return
 
         if raw == Gesture.CLEAR:
-            self.canvas.clear(); self.canvas.reset_pointer()
+            self.canvas.clear()
+            self.canvas.reset_pointer()
             self.gesture_name = "CLEAR (palm)"
             return
 
