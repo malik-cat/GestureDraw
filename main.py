@@ -300,8 +300,12 @@ class AirCanvasApp:
 
 
 def run_app():
-    app = AirCanvasApp()
-    app.run()
+    try:
+        app = AirCanvasApp()
+        app.run()
+    except RuntimeError as exc:
+        print(f"\nERROR: {exc}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
