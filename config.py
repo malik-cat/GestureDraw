@@ -83,6 +83,14 @@ TOOL_BLUE = "blue"
 TOOL_ERASER = "eraser"
 TOOL_CLEAR = "clear"
 
+# Shape tools (Phase 2 of the v2 brief).
+TOOL_LINE = "line"
+TOOL_RECT = "rect"
+TOOL_CIRCLE = "circle"
+TOOL_TRIANGLE = "triangle"
+TOOL_STAR = "star"
+TOOL_DRAW = "draw"          # returns to free-hand drawing
+
 # ------------------------------------------------------------------- #
 # Sidebar tools/options (label, tool id or action, BGR colour)        #
 # ------------------------------------------------------------------- #
@@ -92,6 +100,12 @@ SIDEBAR_ITEMS = [
     ("BLUE",   TOOL_BLUE,   COLOR_BLUE),
     ("ERASER", TOOL_ERASER, COLOR_WHITE),
     ("CLEAR",  TOOL_CLEAR,  COLOR_BLACK),
+    ("LINE",   TOOL_LINE,   COLOR_GRAY),
+    ("RECT",   TOOL_RECT,   COLOR_GRAY),
+    ("CIRCLE", TOOL_CIRCLE, COLOR_GRAY),
+    ("TRIANGLE", TOOL_TRIANGLE, COLOR_GRAY),
+    ("STAR",   TOOL_STAR,   COLOR_GRAY),
+    ("DRAW",   TOOL_DRAW,   COLOR_WHITE),
     ("UNDO",   "undo",      COLOR_GRAY),
     ("SAVE",   "save",      COLOR_GRAY),
     ("BRUSH+", "brush+",    COLOR_GRAY),
@@ -106,6 +120,12 @@ PALETTE_ITEMS = [
     ("BLUE",   TOOL_BLUE,   COLOR_BLUE),
     ("ERASER", TOOL_ERASER, COLOR_WHITE),
     ("CLEAR",  TOOL_CLEAR,  COLOR_BLACK),
+    ("LINE",   TOOL_LINE,   COLOR_GRAY),
+    ("RECT",   TOOL_RECT,   COLOR_GRAY),
+    ("CIRCLE", TOOL_CIRCLE, COLOR_GRAY),
+    ("TRIANGLE", TOOL_TRIANGLE, COLOR_GRAY),
+    ("STAR",   TOOL_STAR,   COLOR_GRAY),
+    ("DRAW",   TOOL_DRAW,   COLOR_WHITE),
 ]
 
 # ------------------------------------------------------------------- #

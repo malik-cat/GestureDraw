@@ -27,6 +27,7 @@ import config
 from canvas import Canvas, Palette, Sidebar
 from frame_capture import FrameSource
 from hand_tracker import Gesture, HandTracker
+from shapes import ShapeEngine, ShapeTool, draw_shape
 
 
 class AirCanvasApp:
@@ -46,6 +47,9 @@ class AirCanvasApp:
         self.tool = config.TOOL_RED        # active tool id
         self.gesture_name = "NONE"
 
+        # Shape engine (Phase 2 of the v2 brief): anchor-drag-commit state.
+        self.shapes = ShapeEngine()
+
         # Bookkeeping for drawing / composition.
         self._cursor = None
 
@@ -55,7 +59,21 @@ class AirCanvasApp:
 
     def apply_tool(self, tool):
         """Apply any tool/action id (palette, sidebar, keyboard)."""
-        if tool == config.TOOL_RED:
+        shape_ids = {config.TOOL_LINE, config.TOOL_RECT, config.TOOL_CIRCLE,
+                     config.TOOL_TRIANGLE, config.TOOL_STAR}
+        if tool == config.TOOL_DRAW:
+            # Back to free-hand drawing.
+            self.shapes.select(ShapeTool.NONE)
+            self.tool = tool
+        elif tool in shape_ids:
+            shape = {config.TOOL_LINE:      ShapeTool.LINE,
+                     config.TOOL_RECT:      ShapeTool.RECT,
+                     config.TOOL_CIRCLE:    ShapeTool.CIRCLE,
+                     config.TOOL_TRIANGLE:  ShapeTool.TRIANGLE,
+                     config.TOOL_STAR:      ShapeTool.STAR}[tool]
+            self.shapes.select(shape)
+            self.tool = tool
+        elif tool == config.TOOL_RED:
             self.canvas.set_color(config.COLOR_RED)
             self.tool = tool
         elif tool == config.TOOL_GREEN:
@@ -101,34 +119,36 @@ class AirCanvasApp:
             return True
         return False
 
-    def handle_hand(self, frame, landmarks, width, height, frame_no):
+    def handle_hand(self, gesture, landmarks, width, height, frame_no):
         """
-        Interpret one hand and act on the canvas.
+        Act on one debounced gesture + hand.
 
         Args:
-            frame: BGR frame (for drawing cursor feedback).
+            gesture:  stable Gesture from the tracker (debounced, not raw).
             landmarks: list of 21 landmarks.
             width/height: live frame size.
-            frame_no: frame counter (unused but kept for future smoothing)
+            frame_no: frame counter (unused but kept for future smoothing).
 
         Returns:
             None (mutates app state in place).
         """
-        fingers = HandTracker.fingers_up(landmarks)
-        raw = HandTracker.classify(fingers)
-
         x, y = HandTracker.index_tip_pixels(landmarks, width, height)
         self._cursor = (x, y)
 
-        if raw == Gesture.SELECT:
-            # SELECT click: hit the palette/sidebar first.
+        # ---- shape tools: SELECT picks, DRAW anchors+drags, leaving
+        #      DRAW commits (Phase 2 of the v2 brief). ----------------
+        if self.shapes.tool_selected:
+            self._handle_shape(gesture, x, y)
+            return
+
+        # ---- free-hand tools ----------------------------------------
+        if gesture == Gesture.SELECT:
             self.select_from_uis(x, y)
             self.canvas.reset_pointer()
             self.gesture_name = "SELECT"
             return
 
-        if raw == Gesture.DRAW:
-            # Draw everywhere except UI hit-zones (Phase 2 decision (a)).
+        if gesture == Gesture.DRAW:
             if self.inside_ui(x, y):
                 self.canvas.reset_pointer()
             else:
@@ -137,7 +157,7 @@ class AirCanvasApp:
             self.gesture_name = "DRAW"
             return
 
-        if raw == Gesture.CLEAR:
+        if gesture == Gesture.CLEAR:
             self.canvas.clear()
             self.canvas.reset_pointer()
             self.gesture_name = "CLEAR (palm)"
@@ -145,6 +165,49 @@ class AirCanvasApp:
 
         self.gesture_name = "HOVER"
         self.canvas.reset_pointer()
+
+    def _handle_shape(self, gesture, x, y):
+        """Shape-mode gesture flow: SELECT selects, DRAW drags, else commit."""
+        if gesture == Gesture.SELECT:
+            # A SELECT inside the shape flow can still pick a different tool.
+            self.select_from_uis(x, y)
+            self.shapes.cancel()
+            self.gesture_name = "SELECT"
+            return
+
+        if gesture == Gesture.DRAW:
+            if self.shapes.anchor is None:
+                self.shapes.begin(x, y)      # anchor the shape
+            else:
+                self.shapes.drag(x, y)       # live preview follows fingertip
+            self.gesture_name = f"SHAPE {self.shapes.tool.name}"
+            return
+
+        # Leaving DRAW (HOVER/CLEAR) -> commit the shape to the canvas.
+        if gesture != Gesture.DRAW:
+            self._commit_shape()
+            self.gesture_name = "COMMIT SHAPE"
+            return
+
+    def _commit_shape(self):
+        """Bake the finished shape into the canvas layer and push history."""
+        committed = self.shapes.commit()
+        if not committed:
+            return
+        tool, anchor, current = committed
+        draw_shape(self.canvas.layer, tool, anchor, current,
+                   self.canvas.width, self.canvas.height,
+                   color=self.canvas.current_color,
+                   thickness=max(1, self.canvas.brush_size))
+        self.canvas.push_stroke_history()
+        self.canvas.reset_pointer()
+
+    def _draw_shape_preview(self, frame):
+        """Render the live yellow outline on the composite (never baked)."""
+        if self.shapes.anchor is not None and self.shapes.current is not None:
+            draw_shape(frame, self.shapes.tool, self.shapes.anchor,
+                       self.shapes.current, frame.shape[1], frame.shape[0],
+                       color=config.COLOR_YELLOW, thickness=2)
 
     def select_from_uis(self, x, y):
         """Hit-test both UI panels and apply any selected tool."""
@@ -214,8 +277,11 @@ class AirCanvasApp:
                 # ---- detect + debounce gestures -------------------------
                 hands = self.tracker.get_hand_landmarks(frame)
                 if not hands:
-                    # Hand left the frame: reset stabiliser + stroke pointer.
+                    # Hand left the frame: reset stabiliser + stroke pointer,
+                    # and commit any in-progress shape (v2 brief Flow rule).
                     self.tracker._stabilizer.reset()
+                    if self.shapes.anchor is not None:
+                        self._commit_shape()
                     self.canvas.reset_pointer()
                     self.gesture_name = "NO HAND"
                 else:
@@ -223,13 +289,14 @@ class AirCanvasApp:
                     landmarks = hands[0]
                     stable = self.tracker.classify_stable(landmarks)
                     self.gesture_name = Gesture(stable).name
-                    self.handle_hand(frame, landmarks, width, height,
+                    self.handle_hand(stable, landmarks, width, height,
                                      frame_no)
 
                 # ---- compose + draw UI ----------------------------------
                 composite = self.canvas.overlay(frame)
                 self.palette.draw(composite, self.tool)
                 self.sidebar.draw(composite, self.tool)
+                self._draw_shape_preview(composite)
                 self.draw_feedback(composite, width, height)
 
                 # Consent overlay (Phase 5).
@@ -258,7 +325,7 @@ class AirCanvasApp:
         """Handle a keypress; returns True to quit."""
         if key == ord(config.KEY_QUIT):
             return True
-        if key == ord(config.KEY_UNDO):
+        if key == ord(config.KEY_UNDO) or key == ord('z'):
             self.canvas.undo()
         elif key == ord(config.KEY_REDO):
             self.canvas.redo()
@@ -274,6 +341,18 @@ class AirCanvasApp:
             self.tool = config.TOOL_GREEN
         elif key == ord('b'):
             self.tool = config.TOOL_BLUE
+        elif key == ord('1'):
+            self.apply_tool(config.TOOL_LINE)
+        elif key == ord('2'):
+            self.apply_tool(config.TOOL_RECT)
+        elif key == ord('3'):
+            self.apply_tool(config.TOOL_CIRCLE)
+        elif key == ord('4'):
+            self.apply_tool(config.TOOL_TRIANGLE)
+        elif key == ord('5'):
+            self.apply_tool(config.TOOL_STAR)
+        elif key == ord('0'):
+            self.apply_tool(config.TOOL_DRAW)
         elif key == ord('+') or key == ord('='):
             self.canvas.set_brush(config.BRUSH_STEP)
         elif key == ord('-'):
