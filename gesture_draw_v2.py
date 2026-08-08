@@ -515,6 +515,12 @@ class GestureDrawApp:
                 if frame.shape[1] != FRAME_WIDTH or \
                         frame.shape[0] != FRAME_HEIGHT:
                     frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+
+                # Mirror like a mirror: the webcam image is unmirrored by
+                # default, which makes your right hand look like a left
+                # hand and puts strokes on the wrong side. Flip once so
+                # tracking, cursor and canvas all share the mirrored space.
+                frame = cv2.flip(frame, 1)
                 height, width = frame.shape[:2]
                 hand = self.tracker.detect(frame)
                 gesture = analyse_hand(hand)
