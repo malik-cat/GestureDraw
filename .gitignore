@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+.idea/
+.vscode/
+*.swp
+
+# Test / logs
+pytest_cache/
+*.log
+
+# Model caches (regenerated on first run if auto-downloaded)
+# hand_landmarker.task is committed for out-of-box runs.
+*.pth
