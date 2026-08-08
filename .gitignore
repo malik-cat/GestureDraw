@@ -19,3 +19,7 @@ pytest_cache/
 # Model caches (regenerated on first run if auto-downloaded)
 # hand_landmarker.task is committed for out-of-box runs.
 *.pth
+# Runtime state
+.first_run_done
+exports/
+

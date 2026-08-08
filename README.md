@@ -113,25 +113,42 @@ Hover your `SELECT` gesture (index + middle up) over a sidebar entry and it
 activates instantly:
 
 ```
-RED    GREEN   BLUE    ERASER   CLEAR
-UNDO   SAVE    BRUSH+  BRUSH−
+RED    GREEN   BLUE    ERASER  CLEAR
+LINE   RECT    CIRCLE  TRIANGLE STAR
+DRAW   UNDO    SAVE    BRUSH+  BRUSH−
 ```
+
+### Drawing shapes
+
+1. Point (`SELECT`) at a shape tool — `LINE`, `RECT`, `CIRCLE`, `TRIANGLE`,
+   or `STAR` — in the sidebar or the top palette, then raise just your index
+   finger (`DRAW`).
+2. The first `DRAW` fingertip point **anchors** the shape.
+3. Drag your finger — a live **yellow** outline previews the shape between the
+   anchor and your fingertip.
+4. Change gesture (or take your hand out of frame) to **commit** the shape in
+   the current color/brush.
+
+`DRAW` (in the list above) or `0` on the keyboard returns to free-hand
+sketching; the shape tool stays selected so you can draw several in a row.
 
 ---
 
 ## ⌨️ Keyboard Shortcuts
 
-| Key            | Action                |
-|----------------|-----------------------|
-| `q`            | Quit                  |
-| `r` / `g` / `b`| Red / Green / Blue pen |
-| `e`            | Eraser                |
-| `c`            | Clear canvas          |
-| `u`            | Undo                  |
-| `y`            | Redo                  |
-| `s`            | Save / export PNG     |
-| `+` / `=`      | Increase brush size   |
-| `−`            | Decrease brush size   |
+| Key            | Action                   |
+|----------------|--------------------------|
+| `q`            | Quit                     |
+| `r` / `g` / `b`| Red / Green / Blue pen   |
+| `e`            | Eraser                   |
+| `c`            | Clear canvas             |
+| `u` / `z`      | Undo                     |
+| `y`            | Redo                     |
+| `s`            | Save / export PNG        |
+| `1`–`5`        | LINE / RECT / CIRCLE / TRIANGLE / STAR |
+| `0`            | Return to free-hand draw |
+| `+` / `=`      | Increase brush size      |
+| `−`            | Decrease brush size      |
 
 ---
 
@@ -168,8 +185,11 @@ GestureDraw/
 5. **Render** — `stroke()` connects consecutive fingertip points with
    `cv2.line()` (a lone starting point draws a dot; jumps over
    `MAX_STROKE_JUMP` px start a new stroke). Strokes live on a persistent
-   full-frame layer merged over the video. UI panels are composited on top
-   and suppress strokes only while the cursor is inside them.
+   full-frame layer merged over the video. Shape tools use an anchor→drag→
+   commit flow: the first `DRAW` point fixes the anchor, later points move a
+   live yellow preview, and leaving `DRAW` bakes the shape into the layer.
+   UI panels are composited on top and suppress strokes only while the cursor
+   is inside them.
 
 ---
 
@@ -231,6 +251,21 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer setup.
   and hard guarantees of no unexpected network/disk I/O.
 - **Quality (Phase 6):** 20 unit tests, ruff linting, GitHub Actions CI.
   Deprecate `air_canvas.py` in favor of `main.py`.
+
+### v0.3.0
+
+- **Shape engine (v2 brief Phase 2):** real `LINE`, `RECT`, `CIRCLE`,
+  `TRIANGLE`, and `STAR` tools with anchor → drag → commit behavior, a live
+  yellow preview, and a `DRAW`/`0` "back to free-hand" tool. Select shapes
+  from the sidebar or top palette or press `1`–`5`.
+- **Undo history granularity (Phase 4.2):** free-hand strokes now push a single
+  history snapshot when the stroke ends, so `u`/`z` undoes a whole stroke.
+- **On-screen feedback (Phase 4.5):** the status line shows the active shape
+  (e.g. `shape:RECT`) alongside gesture and tool.
+- **Test/CI hardening (Phase 6):** camera-free smoke test that constructs the
+  app (would have caught the broken-import regression), plus shape-engine and
+  full-canvas edge-coverage tests. CI now installs the runtime
+  `requirements.txt` (incl. MediaPipe) and compiles `shapes.py`.
 
 ---
 
