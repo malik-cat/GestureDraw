@@ -95,7 +95,8 @@ class Canvas:
           1. If there is no previous point, draw a small dot first instead
              of silently skipping the frame (no dropped first point).
           2. If `(x, y)` moved farther than `self.max_jump` px from the
-             last point, it's a tracking glitch - start a new stroke.
+             last point, it's a tracking glitch: reset the stroke but still
+             paint a dot so the fingertip isn't silently dropped.
           3. Otherwise, connect the previous point to the current one.
 
         Args:
@@ -120,7 +121,11 @@ class Canvas:
         prev = self.last_point
         if abs(point[0] - prev[0]) > self.max_jump or \
            abs(point[1] - prev[1]) > self.max_jump:
-            self.last_point = point       # restart stroke at the new spot
+            # Restart stroke at the new spot, but paint the dot so a
+            # legitimate fast hand doesn't have its first point dropped.
+            cv2.circle(self.layer, point, max(1, thickness // 2),
+                       color, thickness=-1)
+            self.last_point = point
             return
 
         # Case 3: normal connect.

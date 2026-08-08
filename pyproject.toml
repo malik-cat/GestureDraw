@@ -17,8 +17,12 @@ py-modules = [
     "canvas",
     "frame_capture",
     "hand_tracker",
+    "shapes",
     "main",
 ]
+
+[tool.setuptools.packages.find]
+include = ["tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

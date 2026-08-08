@@ -146,11 +146,13 @@ def test_stroke_connects_points_with_line():
 
 def test_max_jump_starts_new_stroke():
     c = Canvas(320, 240)
-    c.stroke(100, 100)
-    c.stroke(500, 420)          # far beyond config.MAX_STROKE_JUMP
-    assert c.last_point == (500, 420)          # pointer did move
-    # no long stray line: only the two dots are painted
+    c.stroke(10, 10)
+    c.stroke(280, 210)          # dx=270 > config.MAX_STROKE_JUMP
+    assert c.last_point == (280, 210)          # pointer did move
+    # No long stray line: paint the new-start dot, not a connecting line.
     assert drawn_pixels(c) < 500
+    mask = np.any(c.layer != config.CANVAS_BG, axis=-1)
+    assert mask[210, 280]                        # post-jump point IS painted
 
 
 def test_reset_pointer_begins_fresh_stroke():
