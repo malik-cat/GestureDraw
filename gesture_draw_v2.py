@@ -45,7 +45,8 @@ Phase 4 — Packaging.
     this script (already committed to the repo).
 
 Run:   python gesture_draw_v2.py
-Keys:  q quit · u undo · c clear · s save PNG · + / - brush size
+Keys:  q quit · u undo · c clear · s save PNG · + / - brush size ·
+       f toggle full screen
 
 Author      : Mohammad Liaquat Ali
 Repository  : https://github.com/malik-cat/GestureDraw
@@ -125,6 +126,9 @@ KEY_UNDO = ord("u")
 KEY_CLEAR = ord("c")
 KEY_BRUSH_UP = ord("+")
 KEY_BRUSH_DOWN = ord("-")
+KEY_FULLSCREEN = ord("f")
+
+WINDOW_NAME = "GestureDraw v2 - Air Canvas"
 
 # ===================================================================== #
 # 2. Gesture classification (Phase 3)                                   #
@@ -483,15 +487,21 @@ class GestureDrawApp:
             raise RuntimeError("Could not open the webcam. Close any "
                                "other app using it and retry.")
 
-        # Size the board to the frames the camera actually delivers (some
-        # webcams ignore the requested resolution).
-        ok, first = cap.read()
-        if not ok or first is None:
-            cap.release()
-            raise RuntimeError("Could not read a first frame from the "
-                               "webcam.")
-        first_h, first_w = first.shape[:2]
-        self.canvas = Canvas(first_w, first_h)
+        # Ask the webcam for 720p. Many cameras ignore this and deliver a
+        # lower resolution, so every frame is resampled to a fixed
+        # FRAME_WIDTH x FRAME_HEIGHT working canvas below.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+        # Fixed-size working canvas -> consistent stroke maths and a
+        # identically-scaled full-screen window on any webcam.
+        self.canvas = Canvas(FRAME_WIDTH, FRAME_HEIGHT)
+
+        # Create a resizeable window and put it into full screen. "f"
+        # toggles back to a windowed view.
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN,
+                              cv2.WINDOW_FULLSCREEN)
 
         try:
             while True:
@@ -501,6 +511,10 @@ class GestureDrawApp:
                 if not ok:
                     continue
 
+                # consistent size on every frame
+                if frame.shape[1] != FRAME_WIDTH or \
+                        frame.shape[0] != FRAME_HEIGHT:
+                    frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
                 height, width = frame.shape[:2]
                 hand = self.tracker.detect(frame)
                 gesture = analyse_hand(hand)
@@ -529,7 +543,7 @@ class GestureDrawApp:
                 self.header.draw(comp, self.tool)
                 self._draw_hud(comp)
 
-                cv2.imshow("GestureDraw v2 - Air Canvas", comp)
+                cv2.imshow(WINDOW_NAME, comp)
                 self.fps_meter.pace()
 
                 key = cv2.waitKey(1) & 0xFF
@@ -569,7 +583,8 @@ class GestureDrawApp:
     def _draw_hud(self, comp):
         y = self.header.height + 22
         label = (f"FPS {self.fps_meter.fps:5.1f} | "
-                 f"tool {self.tool.upper()} | brush {self.canvas.brush}")
+                 f"{self.tool.upper()} | brush {self.canvas.brush} | "
+                 f"f=fullscreen q=quit")
         cv2.putText(comp, label, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     COLOR_YELLOW, 1, cv2.LINE_AA)
 
@@ -599,7 +614,16 @@ class GestureDrawApp:
         elif key == KEY_BRUSH_DOWN:
             self.canvas.brush = max(MIN_BRUSH,
                                     self.canvas.brush - BRUSH_STEP)
+        elif key == KEY_FULLSCREEN:
+            self._toggle_fullscreen()
         return False
+
+    def _toggle_fullscreen(self):
+        cur = cv2.getWindowProperty(WINDOW_NAME,
+                                    cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty(
+            WINDOW_NAME, cv2.WND_PROP_FULLSCREEN,
+            cv2.WINDOW_NORMAL if cur else cv2.WINDOW_FULLSCREEN)
 
     def _save_canvas(self):
         stamp = time.strftime("%Y%m%d_%H%M%S")
