@@ -27,8 +27,10 @@ work as a PNG — all live, on a mirrored video feed.
 
 - **Full-canvas drawing** — every pixel on screen is drawable, edge to edge.
   Strokes are only suppressed while your fingertip is inside a UI panel.
-- **Gesture debouncing** — a gesture must be stable for 3 consecutive frames
-  before it acts, so a single noisy frame no longer splits a stroke into dots.
+- **Gesture debouncing with hysteresis** — a gesture enters in only 2
+  consecutive frames, but once active it takes 5 consecutive different
+  frames to change. Drawing starts without noticeable lag, and a 1-3 frame
+  flicker of the hand never cuts an in-progress stroke in the middle.
 - **Three gestures:**
   - `SELECT` — index + middle raised → move the cursor / click a UI tool.
   - `DRAW` — index raised only → free-hand draw.
@@ -179,12 +181,15 @@ GestureDraw/
    `cv2.flip(frame, 1)` so motion feels natural.
 2. **Track** — MediaPipe Tasks `HandLandmarker` yields 21 landmarks per hand;
    finger state is derived by comparing each fingertip to its PIP joint.
-3. **Stabilise** — a `GestureStabilizer` requires the same gesture for
-   `GESTURE_STABLE_FRAMES` (3) consecutive frames before switching (`classify_stable`).
+3. **Stabilise** — a `GestureStabilizer` uses hysteresis: entering a gesture
+   needs `GESTURE_STABLE_FRAMES` (2) consecutive frames; leaving a confirmed
+   gesture needs `GESTURE_EXIT_FRAMES` (5) different frames, so drawing feels
+   immediate yet a brief flicker of the hand can't cut the stroke
+   (`classify_stable`).
 4. **Classify** — finger patterns map to `SELECT`, `DRAW`, `CLEAR`, or `NONE`.
 5. **Render** — `stroke()` connects consecutive fingertip points with
    `cv2.line()` (a lone starting point draws a dot; jumps over
-   `MAX_STROKE_JUMP` px start a new stroke). Strokes live on a persistent
+   `MAX_STROKE_JUMP` (450) px start a new stroke). Strokes live on a persistent
    full-frame layer merged over the video. Shape tools use an anchor→drag→
    commit flow: the first `DRAW` point fixes the anchor, later points move a
    live yellow preview, and leaving `DRAW` bakes the shape into the layer.

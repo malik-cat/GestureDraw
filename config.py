@@ -36,12 +36,25 @@ MIN_TRACKING_CONFIDENCE = 0.5
 # ------------------------------------------------------------------- #
 # Gesture / drawing behaviour (Phase 1)                               #
 # ------------------------------------------------------------------- #
-# A gesture must stay stable for this many consecutive frames before the
-# app acts on it (debouncing).
-GESTURE_STABLE_FRAMES = 3
+# A gesture must appear for this many consecutive frames before it becomes
+# the active gesture (entry debounce). Kept small so drawing starts fast
+# (no perceptible lag when you raise your finger).
+GESTURE_STABLE_FRAMES = 2
+# A gesture other than the currently-active one must persist for this many
+# consecutive frames before it replaces the active gesture. This is the
+# "release" threshold and is deliberately bigger than STABLE_FRAMES (hysteresis):
+# transient jewellery (a 1-3 frame flicker of NONE/SELECT while drawing) no
+# longer cuts an in-progress stroke mid-way.
+GESTURE_EXIT_FRAMES = 5
 # Maximum fingertip jump (px) between two frames. Beyond it the move is
-# treated as a tracking glitch -> start a fresh stroke.
-MAX_STROKE_JUMP = 120
+# treated as a tracking glitch -> start a fresh stroke. Set well above any
+# normal fast stroke (a 1280x720 frame at ~25fps) so quick strokes stay
+# connected; only absurd teleports are re-anchored.
+MAX_STROKE_JUMP = 450
+# Normalised margin a finger tip must clear its PIP joint by before the
+# finger counts as "raised". Prevents the tip/PIP jitters from flipping a
+# gesture every frame (which used to cut strokes in the middle).
+FINGER_UP_MARGIN = 0.03
 
 # ------------------------------------------------------------------- #
 # Layout                                                              #

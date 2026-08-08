@@ -60,7 +60,7 @@ class HandTracker:
             options = vision.HandLandmarkerOptions(
                 base_options=python.BaseOptions(
                     model_asset_path=str(model_path)),
-                running_mode=vision.RunningMode.IMAGE,
+                running_mode=vision.RunningMode.VIDEO,
                 num_hands=max_hands,
                 min_hand_detection_confidence=detection_confidence,
                 min_hand_presence_confidence=presence_confidence,
@@ -76,13 +76,20 @@ class HandTracker:
         # Gesture debouncer used by :meth:`classify_stable`.
         self._stabilizer = GestureStabilizer()
 
+        # Monotonically-increasing video timestamp (ms) for RunningMode.VIDEO.
+        self._video_ts_ms = 0
+
     # ------------------------------------------------------------------ #
     # Tracking API                                                       #
     # ------------------------------------------------------------------ #
 
     def get_hand_landmarks(self, frame):
         """
-        Feed one BGR frame through the model (Tasks API).
+        Feed one BGR frame through the model (Tasks VIDEO mode).
+
+        VIDEO mode keeps tracking from the previous frame, so it is much
+        faster than re-detecting landmarks every frame and produces
+        smoother, less jittery coordinates (fewer false jumps).
 
         Args:
             frame: The (mirrored) BGR frame.
@@ -93,7 +100,8 @@ class HandTracker:
         """
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self._hands.detect(image)
+        self._video_ts_ms += 33            # ~30fps stride keeps timestamps monotonic
+        result = self._hands.detect_for_video(image, self._video_ts_ms)
         return result.hand_landmarks or []
 
     @staticmethod
@@ -101,9 +109,10 @@ class HandTracker:
         """
         Classify each of the 5 fingers as raised (1) or folded (0).
 
-        A finger is 'up' when its tip has a smaller y than its PIP joint
-        (its vertical coordinate). Works on *any* object exposing .x/.y,
-        which makes this trivially unit-testable with synthetic coords.
+        A finger is 'up' when its tip is clearly above its PIP joint (its
+        vertical coordinate), i.e. by at least ``FINGER_UP_MARGIN`` so a
+        small landmark jitter doesn't flip the reading. Works on *any*
+        object exposing .x/.y, which makes this trivially unit-testable.
 
         Args:
             hand_landmarks: list of 21 objects with .x/.y (0..1).
@@ -114,17 +123,18 @@ class HandTracker:
         fingers = []
 
         # Thumb (landmark 4) bends sideways, not up/down. For a mirrored
-        # image the thumb reads "out" when tip.x < pip.x of the thumb.
-        if hand_landmarks[4].x < hand_landmarks[3].x:
+        # image the thumb reads "out" when tip.x is clearly left of its PIP.
+        if hand_landmarks[4].x < hand_landmarks[3].x - config.FINGER_UP_MARGIN:
             fingers.append(1)
         else:
             fingers.append(0)
 
-        # Fingers 2..5: tip y above PIP y means extended.
+        # Fingers 2..5: tip y below PIP y (with margin) means extended.
         tips_pips = [(8, 6), (12, 10), (16, 14), (20, 18)]
         for tip, pip in tips_pips:
-            fingers.append(1 if hand_landmarks[tip].y < hand_landmarks[pip].y
-                           else 0)
+            raised = (hand_landmarks[tip].y
+                      < hand_landmarks[pip].y - config.FINGER_UP_MARGIN)
+            fingers.append(1 if raised else 0)
 
         return fingers
 
@@ -195,19 +205,34 @@ class HandTracker:
 
 class GestureStabilizer:
     """
-    Holds the gesture state and only switches after the same raw gesture
-    appears for a configurable number of consecutive frames.
+    Debounces gesture input with asymmetric hysteresis.
+
+    Two separate thresholds make strokes feel both *responsive* and
+    *continuous*:
+
+    * Enter: a new gesture needs only ``GESTURE_STABLE_FRAMES`` consecutive
+      frames to become active, so raising your finger starts drawing almost
+      immediately (no start-of-stroke lag).
+    * Exit: once a gesture is active it is kept for at least
+      ``GESTURE_EXIT_FRAMES`` before a *different* gesture can replace it.
+      A noisy 1-3 frame flicker therefore no longer cuts an in-progress
+      stroke in the middle.
     """
 
-    def __init__(self, stable_frames=None):
+    def __init__(self, stable_frames=None, exit_frames=None):
         """
         Args:
-            stable_frames: number of consecutive matching frames required
-                before a gesture becomes active. None -> config default.
+            stable_frames: frames required to *enter* a gesture. None uses
+                the config default.
+            exit_frames: frames a different gesture must persist to *leave*
+                the active gesture. None uses the config default.
         """
         self.stable_frames = (stable_frames
                               if stable_frames is not None
                               else config.GESTURE_STABLE_FRAMES)
+        self.exit_frames = (exit_frames
+                            if exit_frames is not None
+                            else config.GESTURE_EXIT_FRAMES)
 
         self._candidate = None          # raw gesture currently being observed
         self._count = 0                 # consecutive frames for candidate
@@ -223,20 +248,36 @@ class GestureStabilizer:
         """
         Feed one raw gesture, return the stable gesture.
 
+        While a gesture is active, the *same* raw gesture keeps it alive.
+        A different raw gesture must persist for ``exit_frames`` before it
+        replaces the active one, so one-off noise is ignored.
+
         Args:
             raw: Gesture value from this frame.
 
         Returns:
             Gesture: the currently-confirmed gesture.
         """
+        if raw == self._active:
+            # Still the confirmed gesture: reset the alternate counter.
+            self._candidate = None
+            self._count = 0
+            return self._active
+
         if raw == self._candidate:
             self._count += 1
         else:
             self._candidate = raw
             self._count = 1
 
-        if self._count >= self.stable_frames:
+        # Enter a gesture fast, but hold onto an active one much longer.
+        threshold = (self.stable_frames
+                     if self._active == Gesture.NONE
+                     else self.exit_frames)
+        if self._count >= threshold:
             self._active = raw
+            self._candidate = None
+            self._count = 0
         return self._active
 
 

@@ -107,12 +107,26 @@ def test_stabilizer_requires_consecutive_frames():
 
 
 def test_stabilizer_noise_does_not_switch():
-    s = GestureStabilizer(stable_frames=3)
+    s = GestureStabilizer(stable_frames=2, exit_frames=5)
+    s.update(Gesture.DRAW)
+    s.update(Gesture.DRAW)          # DRAW becomes active
+    assert s.update(Gesture.DRAW) == Gesture.DRAW
+    # A noisy NONE frame must not switch away from a confirmed DRAW.
+    assert s.update(Gesture.NONE) == Gesture.DRAW
+    assert s.update(Gesture.NONE) == Gesture.DRAW
+    assert s.update(Gesture.SELECT) == Gesture.DRAW   # even a different gesture
+    assert s.update(Gesture.DRAW) == Gesture.DRAW
+
+
+def test_stabilizer_releases_after_exit_frames():
+    s = GestureStabilizer(stable_frames=2, exit_frames=5)
     s.update(Gesture.DRAW)
     s.update(Gesture.DRAW)
-    # One noisy NONE frame must not switch away from a confirmed DRAW.
+    # Active DRAW must survive a handful of NONE frames...
+    for _ in range(4):
+        assert s.update(Gesture.NONE) == Gesture.DRAW
+    # ...but eventually a sustained NONE replaces it.
     assert s.update(Gesture.NONE) == Gesture.NONE
-    assert s.update(Gesture.DRAW) == Gesture.NONE
 
 
 def test_stabilizer_reset():
@@ -145,9 +159,9 @@ def test_stroke_connects_points_with_line():
 
 
 def test_max_jump_starts_new_stroke():
-    c = Canvas(320, 240)
+    c = Canvas(320, 240, max_jump=120)
     c.stroke(10, 10)
-    c.stroke(280, 210)          # dx=270 > config.MAX_STROKE_JUMP
+    c.stroke(280, 210)          # dx=270 > this canvas's 120px max_jump
     assert c.last_point == (280, 210)          # pointer did move
     # No long stray line: paint the new-start dot, not a connecting line.
     assert drawn_pixels(c) < 500
