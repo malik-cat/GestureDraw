@@ -1,217 +1,328 @@
 """
-PHASE 3: Dual-Layer Drawing Canvas & Header Palette
-===================================================
-This module owns the drawing state of the application.
+PHASE 3 (updated): Dual-Layer Drawing Canvas, Header Palette & Sidebar
+======================================================================
+This module owns all drawing state plus the two interactive UI areas.
 
 Author : Mohammad Liaquat Ali
 Repository : https://github.com/malik-cat/GestureDraw
 
 Design
 ------
-* The whiteboard is a **standalone canvas matrix** whose size matches the
-  video frame. Strokes are stored there and never auto-reset.
-* Each frame the whiteboard matrix is merged with the video feed so the
-  lines persist (dual-layer rendering).
-* At the top of the video frame we render the interactive **header palette**
-  (Red / Green / Blue / Eraser / Clear) so the user can point at a swatch
-  with a SELECT gesture to change the active tool.
+* The whiteboard is a **standalone canvas matrix**, same size as the
+  video frame, so every pixel on screen is drawable (Phase 2 fix).
+* UI panels (top palette + left sidebar) are drawn *on top of* the feed.
+  Strokes are suppressed only while the fingertip is inside a UI hit-zone
+  (brief Phase 2 decision (a)); everywhere else is drawable edge-to-edge.
+* Stroke continuity fixes (Phase 1):
+    - a lone point (no previous) draws a small dot, not nothing;
+    - a fingertip jump larger than MAX_STROKE_JUMP starts a new stroke.
+* Undo/redo history for Phase 4.
 """
 
-import cv2
 import numpy as np
 
-# --- Colours (BGR order as OpenCV expects them) ------------------------
-COLOR_GREEN = (0, 255, 0)
-COLOR_BLUE = (255, 0, 0)
-COLOR_RED = (0, 0, 255)
-COLOR_YELLOW = (0, 255, 255)
-COLOR_BLACK = (0, 0, 0)
-COLOR_WHITE = (255, 255, 255)
+import cv2
 
-# --- Tool identifiers (used by Phase 4 to compare) ---------------------
-TOOL_RED = "red"
-TOOL_GREEN = "green"
-TOOL_BLUE = "blue"
-TOOL_ERASER = "eraser"
-TOOL_CLEAR = "clear"
-
-# --- Header metrics for the palette bar along the top of the feed ------
-HEADER_HEIGHT = 40          # total height of the header in pixels
+import config
 
 
 class Canvas:
     """
-    Stores the persistent drawing matrix plus the stroke settings.
-
-    The layer is a white (BGR 255) matrix that keeps whatever is painted
-    on it. The drawing and the video stream are merged in `overlay()`.
+    Stores the persistent drawing matrix, brush settings and the undo/redo
+    history.
     """
 
-    def __init__(self, width, height):
+    def __init__(self, width, height, max_jump=None):
         """
         Args:
-            width:  Drawing width  (px) - same as the video frame.
-            height: Drawing height (px) - same as the video frame.
+            width:   Drawing width  (px) - same as the video frame.
+            height:  Drawing height (px) - same as the video frame.
+            max_jump: px threshold for a "jump" -> new stroke. None uses
+                the config default.
         """
         self.width = width
         self.height = height
+        self.max_jump = max_jump or config.MAX_STROKE_JUMP
 
-        # The persistent white layer; strokes accumulate here.
-        self.layer = np.full((height, width, 3), COLOR_WHITE, dtype=np.uint8)
+        # Persistent white drawing layer (same full-frame size).
+        self.layer = np.full((height, width, 3), config.CANVAS_BG,
+                             dtype=np.uint8)
 
-        # Current pen configuration.
-        self.current_color = COLOR_GREEN
-        self.brush_size = 8
-        self.eraser_size = 28
+        # Stroke settings.
+        self.current_color = config.COLOR_RED
+        self.brush_size = config.DEFAULT_BRUSH_SIZE
+        self.eraser_size = config.ERASER_SIZE
 
-        # Fingertip position from the previous frame so strokes are
-        # continuous lines instead of disconnected dots.
+        # Stroke endpoints continuity (Phase 1/2).
         self.last_point = None
 
-    # ------------------------------------------------------------------
-    # Core drawing primitives (only touch `self.layer`)
-    # ------------------------------------------------------------------
+        # Undo / redo history.
+        self._undo_stack: list[np.ndarray] = []
+        self._redo_stack: list[np.ndarray] = []
+        self._max_history = 25
+
+    # ------------------------------------------------------------------ #
+    # Colour / brush                                                     #
+    # ------------------------------------------------------------------ #
 
     def set_color(self, color):
-        """Set the drawing colour to `color` (a BGR tuple)."""
+        """Set the drawing colour to `color` (BGR tuple)."""
         self.current_color = color
 
+    def set_brush(self, step):
+        """
+        Change brush size by `step` (px), clamped to the config bounds.
+
+        Args:
+            step: positive to grow, negative to shrink.
+        """
+        self.brush_size = min(
+            config.MAX_BRUSH_SIZE,
+            max(config.MIN_BRUSH_SIZE, self.brush_size + step))
+
+    # ------------------------------------------------------------------ #
+    # Stroke primitives (Phase 1 fixes)                                  #
+    # ------------------------------------------------------------------ #
+
     def reset_pointer(self):
-        """Forget the previous fingertip (begin a new stroke)."""
+        """Forget the previous fingertip - start a new stroke."""
         self.last_point = None
 
     def stroke(self, x, y, is_eraser=False):
         """
-        Draw a line toward `(x, y)` on the canvas layer.
+        Draw toward `(x, y)` on the layer, keeping strokes continuous.
 
-        When `is_eraser` is True the "ink" is white so the stroke removes
-        previously drawn paint from the whiteboard.
+        Phase 1 fixes:
+          1. If there is no previous point, draw a small dot first instead
+             of silently skipping the frame (no dropped first point).
+          2. If `(x, y)` moved farther than `self.max_jump` px from the
+             last point, it's a tracking glitch - start a new stroke.
+          3. Otherwise, connect the previous point to the current one.
+
+        Args:
+            x:        horizontal pixel coordinate.
+            y:        vertical pixel coordinate.
+            is_eraser: True erases (paints background colour) instead of
+                drawing with the current colour.
         """
-        color = COLOR_WHITE if is_eraser else self.current_color
-        thickness = self.eraser_size if is_eraser else self.brush_size
+        color = (config.CANVAS_BG if is_eraser else self.current_color)
+        thickness = (self.eraser_size if is_eraser else self.brush_size)
 
-        if self.last_point is not None:
-            cv2.line(self.layer, self.last_point, (x, y), color, thickness,
-                     lineType=cv2.LINE_AA)
-        self.last_point = (x, y)
+        point = (x, y)
+
+        # Case 1: fresh stroke start == dot only.
+        if self.last_point is None:
+            cv2.circle(self.layer, point, max(1, thickness // 2),
+                       color, thickness=-1)
+            self.last_point = point
+            return
+
+        # Case 2: max-jump guard - treat an enormous move as a glitch.
+        prev = self.last_point
+        if abs(point[0] - prev[0]) > self.max_jump or \
+           abs(point[1] - prev[1]) > self.max_jump:
+            self.last_point = point       # restart stroke at the new spot
+            return
+
+        # Case 3: normal connect.
+        cv2.line(self.layer, prev, point, color, thickness, cv2.LINE_AA)
+        self.last_point = point
+
+    # ------------------------------------------------------------------ #
+    # Canvas-wide operations                                             #
+    # ------------------------------------------------------------------ #
 
     def clear(self):
-        """Erase the entire whiteboard."""
-        self.layer.fill(COLOR_WHITE)
+        """Save history, then empty the whiteboard."""
+        self._push_history()
+        self.layer.fill(config.CANVAS_BG)
         self.last_point = None
 
-    # ------------------------------------------------------------------
-    # Rendering / merging with the video feed (dual-layer composite)
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ #
+    # Undo / redo (Phase 4)                                               #
+    # ------------------------------------------------------------------ #
+
+    def _push_history(self):
+        """Save a snapshot of the current layer to the undo stack."""
+        self._undo_stack.append(self.layer.copy())
+        self._redo_stack.clear()
+        if len(self._undo_stack) > self._max_history:
+            self._undo_stack.pop(0)
+
+    def push_stroke_history(self):
+        """Push the current layer to the history (called after a stroke)."""
+        self._push_history()
+
+    def undo(self):
+        """Undo the last stroke/clear. Returns True if anything changed."""
+        if not self._undo_stack:
+            return False
+        self._redo_stack.append(self.layer.copy())
+        self.layer = self._undo_stack.pop().copy()
+        self.last_point = None
+        return True
+
+    def redo(self):
+        """Redo a previously undone operation."""
+        if not self._redo_stack:
+            return False
+        self._undo_stack.append(self.layer.copy())
+        self.layer = self._redo_stack.pop().copy()
+        self.last_point = None
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Rendering / merging with the video feed                            #
+    # ------------------------------------------------------------------ #
 
     def overlay(self, frame):
         """
         Composite the drawing layer over the video frame.
 
-        Only "painted" pixels (anything that is not pure white) overwrite
-        the video; the white parts stay transparent so the webcam feed
-        shows through behind the strokes.
-
-        Args:
-            frame: Mirrored BGR video frame.
-
-        Returns:
-            ndarray: frame + drawing merged into one image.
+        Pixels other than background (CANVAS_BG) fully replace the video
+        so strokes stay opaque; since the layer is full-frame, the whole
+        screen is drawable (Phase 2).
         """
-        overlay = frame.copy()
-        painted = np.any(self.layer != COLOR_WHITE, axis=-1)
-        overlay[painted] = self.layer[painted]
-        return overlay
+        composite = frame.copy()
+        mask = np.any(self.layer != config.CANVAS_BG, axis=-1)
+        composite[mask] = self.layer[mask]
+        return composite
+
+
+class UIButton:
+    """Immutable interactive rectangle used by both header and sidebar."""
+
+    __slots__ = ("tool", "label", "rect")
+
+    def __init__(self, tool, label, rect):
+        self.tool = tool          # tool id / action (str)
+        self.label = label        # short display text
+        self.rect = rect          # (x1, y1, x2, y2)
+
+    def contains(self, x, y):
+        """True when the point (x, y) is inside this button."""
+        x1, y1, x2, y2 = self.rect
+        return x1 <= x < x2 and y1 <= y < y2
 
 
 class Palette:
     """
-    Draws the interactive header bar and hit-tests fingertip positions.
+    Top header palette rendered over the video.
 
-    The palette is rendered into the top `HEADER_HEIGHT` rows of the video
-    frame, split into equal-width swatches left -> right.
+    Rendered on top of the composite; hit-tested like the sidebar. has no
+    draw-suppression logic - strokes are only suppressed while the
+    fingertip is inside a button (handled by the app using hit_test).
     """
 
-    # Ordered tool list -> defines swatch layout and labels.
-    TOOLS = [
-        (TOOL_RED, COLOR_RED, "RED"),
-        (TOOL_GREEN, COLOR_GREEN, "GREEN"),
-        (TOOL_BLUE, COLOR_BLUE, "BLUE"),
-        (TOOL_ERASER, COLOR_WHITE, "ERASER"),
-        (TOOL_CLEAR, COLOR_BLACK, "CLEAR"),
-    ]
+    def __init__(self, items=None, header_height=None):
+        self.items = items or config.PALETTE_ITEMS
+        self.header_height = header_height or config.HEADER_HEIGHT
+        self.buttons = []          # (re)built in draw()
 
-    def __init__(self, header_height=HEADER_HEIGHT):
-        self.header_height = header_height
-
-    def swatch_width(self, frame_width):
-        """Width (px) of every swatch for a frame of `frame_width`."""
-        return frame_width // len(self.TOOLS)
-
-    # ------------------------------------------------------------------
-    # Rendering
-    # ------------------------------------------------------------------
+    def _build_buttons(self, width):
+        """Compute button rects for the current frame width."""
+        self.buttons = []
+        box_w = width // len(self.items)
+        for i, (label, tool, color) in enumerate(self.items):
+            rect = (i * box_w, 0, (i + 1) * box_w, self.header_height)
+            self.buttons.append(UIButton(tool, label, rect))
 
     def draw(self, frame, active_tool):
-        """
-        Render the colour swatches into the top rows of `frame`.
-
-        Args:
-            frame:       BGR frame being edited in place.
-            active_tool: tool id (TOOL_RED, ...) to highlight in yellow.
-        """
+        """Render the palette into the top rows of `frame`."""
         height, width = frame.shape[:2]
-        box_w = self.swatch_width(width)
+        self._build_buttons(width)
 
-        for i, (tool_id, color, label) in enumerate(self.TOOLS):
-            x1 = i * box_w
-            x2 = (i + 1) * box_w
+        for i, button in enumerate(self.buttons):
+            x1, y1, x2, y2 = button.rect
+            color = self.items[i][2]
 
-            # Filled swatch block + subtle black border.
-            cv2.rectangle(frame, (x1, 0), (x2 - 2, self.header_height - 2),
-                          color, thickness=-1)
-            cv2.rectangle(frame, (x1, 0), (x2 - 2, self.header_height - 2),
-                          (0, 0, 0), thickness=1)
+            cv2.rectangle(frame, (x1, y1), (x2 - 2, y2 - 2), color, -1)
+            cv2.rectangle(frame, (x1, y1), (x2 - 2, y2 - 2), (0, 0, 0), 1)
 
-            # Draw the label text centered-ish in the swatch.
-            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
-                                         0.5, 2)[0]
-            label_x = x1 + (box_w - label_size[0]) // 2
-            label_y = self.header_height // 2 + label_size[1] // 2
-            cv2.putText(frame, label, (label_x, label_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (0, 0, 0) if color == COLOR_WHITE else (255, 255, 255),
-                        2, cv2.LINE_AA)
+            if color == config.COLOR_WHITE:
+                text_clr = (0, 0, 0)
+            else:
+                text_clr = (255, 255, 255)
 
-            # Yellow outline highlights the tool currently in use.
-            if tool_id == active_tool:
-                cv2.rectangle(frame, (x1, 0), (x2 - 2, self.header_height - 2),
-                              COLOR_YELLOW, thickness=2)
+            cv2.putText(frame, button.label,
+                        (x1 + 8, y1 + (y2 - y1) // 2 + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_clr, 1,
+                        cv2.LINE_AA)
 
-    # ------------------------------------------------------------------
-    # Hit testing
-    # ------------------------------------------------------------------
+            if button.tool == active_tool:
+                cv2.rectangle(frame, (x1, y1), (x2 - 2, y2 - 2),
+                              config.COLOR_YELLOW, 2)
 
-    def hit_test(self, x, y, frame_width):
-        """
-        Identify which tool swatch sits under pixel `(x, y)`.
-
-        Args:
-            x:           horizontal pixel coordinate (0 is the left edge).
-            y:           vertical pixel coordinate (0 is the header top).
-            frame_width: total frame width used to compute swatch width.
-
-        Returns:
-            str:  tool identifier (TOOL_RED, TOOL_GREEN, ...) or None when
-                  the point is outside the header bar.
-        """
+    def hit_test(self, x, y):
+        """Return the tool under (x, y) or None (requires a built palette)."""
         if y < 0 or y >= self.header_height:
             return None
+        for button in self.buttons:
+            if button.contains(x, y):
+                return button.tool
+        return None
 
-        box_w = self.swatch_width(frame_width)
-        index = x // box_w
 
-        if index < 0 or index >= len(self.TOOLS):
+class Sidebar:
+    """
+    Vertical tool/options panel on the left edge (Phase 3).
+
+    Rendered on top of the composite; everything to its right remains
+    drawable. Hit-testing mirrors :class:`Palette.hit_test`.
+    """
+
+    def __init__(self, items=None, width=None):
+        self.items = items or config.SIDEBAR_ITEMS
+        self.width = width or config.SIDEBAR_WIDTH
+        self.buttons = []
+
+    def _build_buttons(self, height):
+        self.buttons = []
+        item_h = max(28, height // len(self.items))
+        for i, (label, tool, color) in enumerate(self.items):
+            y1 = i * item_h
+            y2 = y1 + item_h
+            self.buttons.append(UIButton(tool, label,
+                                         (0, y1, self.width, y2)))
+
+    def draw(self, frame, active_tool):
+        """Render the sidebar into the left column of `frame."""
+        height, width = frame.shape[:2]
+        self._build_buttons(height)
+
+        # Panel background so text is readable against the video.
+        cv2.rectangle(frame, (0, 0), (self.width - 2, height - 1),
+                      config.COLOR_BG, -1)
+
+        for i, button in enumerate(self.buttons):
+            x1, y1, x2, y2 = button.rect
+            color = self.items[i][2]
+
+            cv2.rectangle(frame, (x1 + 2, y1 + 2),
+                          (x2 - 2, y2 - 2), color, -1)
+
+            # Text colour for dark-on-light labels.
+            if color == config.COLOR_WHITE:
+                text_clr = (255, 255, 255)
+            else:
+                text_clr = (0, 0, 0)
+
+            cv2.putText(frame, button.label,
+                        (x1 + 8, y1 + (y2 - y1) // 2 + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_clr, 1,
+                        cv2.LINE_AA)
+
+            # Highlight the active tool in yellow (SELECT feedback).
+            if button.tool == active_tool:
+                cv2.rectangle(frame, (x1 + 2, y1 + 2),
+                              (x2 - 2, y2 - 2),
+                              config.COLOR_YELLOW, 3)
+
+    def hit_test(self, x, y):
+        """Return the tool under (x, y) or None."""
+        if x < 0 or x >= self.width:
             return None
-
-        return self.TOOLS[index][0]     # tool identifier
+        for button in self.buttons:
+            if button.contains(x, y):
+                return button.tool
+        return None
