@@ -1,185 +1,245 @@
 """
-PHASE 2: Hand Tracking & Gesture Recognition Engine
-====================================================
-This module contains everything related to MediaPipe hand tracking and the
-mapping of raw hand landmarks to high-level gestures.
+PHASE 2 (updated): Hand Tracking & Gesture Recognition Engine
+==============================================================
+Finger classification + gesture mapping. Rebuilt on MediaPipe **Tasks**
+HandLandmarker (the legacy `mp.solutions` API was removed in MediaPipe
+1.0.0) and extended with gesture debouncing to fix dropped strokes.
 
 Author : Mohammad Liaquat Ali
 Repository : https://github.com/malik-cat/GestureDraw
 
 Responsibilities
 ----------------
-* Run the MediaPipe Hands model over each BGR frame.
-* Return the pixel coordinates of the hand landmarks.
-* Determine which fingers are raised/extended.
-* Translate the finger state into one of our app specific gestures:
-      Gesture.DRAW       -> index finger up only          (drawing mode)
-      Gesture.SELECT     -> index + middle up             (menu / cursor mode)
-      Gesture.CLEAR      -> all five fingers up         (clear the canvas)
-      Gesture.NONE       -> any other combination       (do nothing)
+* Run the MediaPipe HandLandmarker model over each BGR frame (Tasks API).
+* Determine which fingers are raised and map them to gestures.
+* Debounce / stabilise gesture output across consecutive frames so one
+  noisy frame doesn't interrupt an in-progress stroke (Phase 1).
 
-MediaPipe Hand landmark indices (21 points per hand):
-    0: wrist   4: thumb tip            8: index tip
-    12: middle tip  16: ring tip       20: pinky tip
-    6: index pip   10: middle pip      (used to measure finger raised)
+Landmark indices used (21 per hand):
+  4 thumb tip | 8 index tip | 12 middle tip | 16 ring tip | 20 pinky tip
+  6 index pip | 10 middle pip   (finger raised test)
 """
+
+from enum import IntEnum
 
 import cv2
 import mediapipe as mp
-from enum import IntEnum
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+import config
 
 
 class Gesture(IntEnum):
-    """Every meaningful gesture the application understands."""
+    """Every gesture the application understands."""
     NONE = 0    # no relevant action, just hover
     DRAW = 1    # index raised -> start/continue drawing
-    SELECT = 2  # index + middle raised -> select colours / move cursor
-    CLEAR = 3   # all fingers raised -> wipe the whiteboard
+    SELECT = 2  # index + middle raised -> select / move cursor
+    CLEAR = 3   # all fingers raised -> wipe the canvas
 
 
 class HandTracker:
-    """Wraps MediaPipe Hands and translates landmarks into gestures."""
+    """Wraps the MediaPipe Tasks HandLandmarker and classifies gestures."""
 
-    def __init__(self, max_hands=1,
-                 detection_confidence=0.7,
-                 tracking_confidence=0.5):
+    def __init__(self, model_path=config.MODEL_PATH,
+                 max_hands=config.MAX_HANDS,
+                 detection_confidence=config.MIN_DETECTION_CONFIDENCE,
+                 tracking_confidence=config.MIN_TRACKING_CONFIDENCE,
+                 presence_confidence=config.MIN_PRESENCE_CONFIDENCE):
         """
-        Initialise the MediaPipe Hands model.
+        Initialise the MediaPipe Tasks model.
 
         Args:
-            max_hands: Cap on simultaneous tracked hands (we only need one).
-            detection_confidence: Minimum confidence to start tracking.
-            tracking_confidence:  Minimum confidence to keep tracking.
+            model_path: Path to the hand_landmarker.task model file.
+            max_hands:  Max simultaneous tracked hands.
+            detection_confidence: Min confidence to detect a hand.
+            tracking_confidence:  Min confidence to keep tracking.
+            presence_confidence:  Min confidence a detected hand exists.
         """
-        self._mp_hands = mp.solutions.hands
-        self._mp_draw = mp.solutions.drawing_utils
+        try:
+            options = vision.HandLandmarkerOptions(
+                base_options=python.BaseOptions(
+                    model_asset_path=str(model_path)),
+                running_mode=vision.RunningMode.IMAGE,
+                num_hands=max_hands,
+                min_hand_detection_confidence=detection_confidence,
+                min_hand_presence_confidence=presence_confidence,
+                min_tracking_confidence=tracking_confidence,
+            )
+            self._hands = vision.HandLandmarker.create_from_options(options)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load MediaPipe model from {model_path}. "
+                "Download hand_landmarker.task and keep it next to "
+                f"air_canvas.py. Details: {exc}") from exc
 
-        self._hands = self._mp_hands.Hands(
-            static_image_mode=False,          # video stream, not images
-            max_num_hands=max_hands,
-            min_detection_confidence=detection_confidence,
-            min_tracking_confidence=tracking_confidence,
-        )
+        # Gesture debouncer used by :meth:`classify_stable`.
+        self._stabilizer = GestureStabilizer()
 
     # ------------------------------------------------------------------ #
-    # Tracking API
+    # Tracking API                                                       #
     # ------------------------------------------------------------------ #
 
     def get_hand_landmarks(self, frame):
         """
-        Feed one BGR frame through the model.
+        Feed one BGR frame through the model (Tasks API).
 
         Args:
-            frame: The (mirrored) BGR frame from Phase 1.
+            frame: The (mirrored) BGR frame.
 
         Returns:
-            A MediaPipe `results` object. Access .multi_hand_landmarks
-            for a list of hands (None when no hand is present).
+            list[list[lm]]: per-hand lists of 21 landmark objects with
+            `.x/.y` (normalised), or an empty list when no hand.
         """
-        # MediaPipe expects RGB input, our camera gives BGR.
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return self._hands.process(rgb)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self._hands.detect(image)
+        return result.hand_landmarks or []
 
     @staticmethod
     def fingers_up(hand_landmarks):
         """
         Classify each of the 5 fingers as raised (1) or folded (0).
 
-        Heuristic: a finger is 'up' when its tip is higher than the joint
-        two landmarks below it. Both coordinates are normalised [0..1].
+        A finger is 'up' when its tip has a smaller y than its PIP joint
+        (its vertical coordinate). Works on *any* object exposing .x/.y,
+        which makes this trivially unit-testable with synthetic coords.
 
         Args:
-            hand_landmarks: A list of 21 MediaPipe landmarks.
+            hand_landmarks: list of 21 objects with .x/.y (0..1).
 
         Returns:
             list[int]: [thumb, index, middle, ring, pinky] of 1/0 values.
         """
         fingers = []
 
-        # Thumb (landmark 4) is special: it bends sideways, not up/down.
-        # For a mirrored right hand the thumb is "out" when tip.x < pip.x.
+        # Thumb (landmark 4) bends sideways, not up/down. For a mirrored
+        # image the thumb reads "out" when tip.x < pip.x of the thumb.
         if hand_landmarks[4].x < hand_landmarks[3].x:
             fingers.append(1)
         else:
             fingers.append(0)
 
-        # The other four fingers: tip (y) above the pip (y) means raised.
-        tips_ips = [(8, 6), (12, 10), (16, 14), (20, 18)]
-        for tip, pip in tips_ips:
-            if hand_landmarks[tip].y < hand_landmarks[pip].y:
-                fingers.append(1)
-            else:
-                fingers.append(0)
+        # Fingers 2..5: tip y above PIP y means extended.
+        tips_pips = [(8, 6), (12, 10), (16, 14), (20, 18)]
+        for tip, pip in tips_pips:
+            fingers.append(1 if hand_landmarks[tip].y < hand_landmarks[pip].y
+                           else 0)
 
         return fingers
 
     @staticmethod
     def index_tip_pixels(hand_landmarks, frame_width, frame_height):
-        """
-        Convert the normalized index-finger tip (landmark 8) into pixels.
-
-        Returns:
-            tuple[int, int] scaled into the frame coordinate space.
-        """
+        """Pixel (x, y) of the index finger tip (landmark 8)."""
         lm = hand_landmarks[8]
-        x = int(lm.x * frame_width)
-        y = int(lm.y * frame_height)
-        return x, y
+        return int(lm.x * frame_width), int(lm.y * frame_height)
 
     # ------------------------------------------------------------------ #
-    # Gesture mapping
+    # Gesture mapping                                                    #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def classify(fingers):
         """
-        Turn a raw [thumb, index, middle, ring, pinky] list into an
-        app-level :class:`Gesture`.
+        Turn a raw [thumb, index, middle, ring, pinky] list into a Gesture.
 
         Args:
             fingers: Output of :meth:`fingers_up` (5 x 1/0 entries).
 
         Returns:
-            Gesture value (NONE when the pattern is unrecognised).
+            Gesture value.
         """
         index, middle = fingers[1], fingers[2]
 
-        # Index + middle raised together -> SELECT / cursor mode.
-        if index == 1 and middle == 1:
-            return Gesture.SELECT
-
-        # Only the index finger raised -> DRAW.
-        if index == 1 and middle == 0:
-            return Gesture.DRAW
-
-        # All five fingers raised -> CLEAR (utility gesture).
+        # All five raised -> CLEAR (utility gesture, fastest draw).
         if all(f == 1 for f in fingers):
             return Gesture.CLEAR
 
-        # Everything else is treated as "no gesture".
+        # Index + middle up -> SELECT.
+        if index == 1 and middle == 1:
+            return Gesture.SELECT
+
+        # Index only up -> DRAW.
+        if index == 1 and middle == 0:
+            return Gesture.DRAW
+
+        # Anything else -> NONE (hover).
         return Gesture.NONE
 
     # ------------------------------------------------------------------ #
-    # Convenience helpers
+    # Gesture stabiliser (Phase 1)                                       #
     # ------------------------------------------------------------------ #
 
-    def draw_landmarks(self, frame, hand_landmarks):
+    def classify_stable(self, hand_landmarks):
         """
-        Overlay the visible hand skeleton on a frame for debugging.
+        Debounce gesture detection to make strokes robust to noise.
+
+        The raw gesture must remain the same for `GESTURE_STABLE_FRAMES`
+        consecutive frames before the app acts on it. Until then the
+        *previous* stable gesture is returned, so a single spurious frame
+        no longer interrupts an active stroke.
+
+        Args:
+            hand_landmarks: list of 21 landmarks.
+
+        Returns:
+            Gesture: the currently *stable* gesture.
         """
-        self._mp_draw.draw_landmarks(
-            frame,
-            hand_landmarks,
-            self._mp_hands.HAND_CONNECTIONS,
-        )
+        raw = self.classify(self.fingers_up(hand_landmarks))
+        return self._stabilizer.update(raw)
 
     def release(self):
         """Free the model resources."""
         self._hands.close()
 
 
-if __name__ == "__main__":
-    print("Phase 2 - Gesture Recognition Engine self-test")
-    tracker = HandTracker()
-    print("MediaPipe hands model initialised OK.")
-    tracker.release()
+class GestureStabilizer:
+    """
+    Holds the gesture state and only switches after the same raw gesture
+    appears for a configurable number of consecutive frames.
+    """
+
+    def __init__(self, stable_frames=None):
+        """
+        Args:
+            stable_frames: number of consecutive matching frames required
+                before a gesture becomes active. None -> config default.
+        """
+        self.stable_frames = (stable_frames
+                              if stable_frames is not None
+                              else config.GESTURE_STABLE_FRAMES)
+
+        self._candidate = None          # raw gesture currently being observed
+        self._count = 0                 # consecutive frames for candidate
+        self._active = Gesture.NONE     # last confirmed stable gesture
+
+    def reset(self):
+        """Force the stabiliser back to NONE (e.g. hand left the frame)."""
+        self._candidate = None
+        self._count = 0
+        self._active = Gesture.NONE
+
+    def update(self, raw):
+        """
+        Feed one raw gesture, return the stable gesture.
+
+        Args:
+            raw: Gesture value from this frame.
+
+        Returns:
+            Gesture: the currently-confirmed gesture.
+        """
+        if raw == self._candidate:
+            self._count += 1
+        else:
+            self._candidate = raw
+            self._count = 1
+
+        if self._count >= self.stable_frames:
+            self._active = raw
+        return self._active
+
+
+def classify_passive(fingers):
+    """Small wrapper so external callers can reuse the classifier."""
+    return HandTracker.classify(fingers)
