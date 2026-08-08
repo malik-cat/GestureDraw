@@ -210,3 +210,128 @@ def test_pinch_outside_header_does_not_select():
     # cursor inside strip region but x below strip (y>height) - no click
     assert h.update((630, h.height + 5), v2.PINCH_ON_RATIO * 0.5,
                     v2.DRAW) is None
+
+
+# ------------------------------------------------------------------ #
+# v2.1 - random colour / smoothing / bridging helpers                #
+# ------------------------------------------------------------------ #
+
+def test_random_vibrant_color_is_bgr_tuple():
+    c = v2.random_vibrant_color()
+    assert len(c) == 3
+    assert all(0 <= v <= 255 for v in c)
+
+
+def test_random_colors_distinct_across_steps():
+    # golden-angle stepping should not return identical colours every time
+    colors = {v2.random_vibrant_color(offset=i) for i in range(8)}
+    assert len(colors) >= 3
+
+
+def test_moving_average_returns_midpoint():
+    pts = collections.deque([(10, 20), (20, 40)])
+    assert v2.moving_average(pts) == (15, 30)
+
+
+def test_moving_average_empty_is_none():
+    assert v2.moving_average(collections.deque()) is None
+
+
+def test_predict_bridged_point_extrapolates():
+    hist = collections.deque([(0, 0), (10, 0)])
+    assert v2.predict_bridged_point(hist) == (20, 0)
+
+
+def test_predict_bridged_point_needs_two_samples():
+    assert v2.predict_bridged_point(collections.deque([(5, 5)])) is None
+
+
+# ------------------------------------------------------------------ #
+# v2.1 - Canvas opacity, shapes, flood fill                          #
+# ------------------------------------------------------------------ #
+
+def test_canvas_opacity_blends_with_background():
+    canvas = v2.Canvas(120, 90)
+    canvas.opacity = 0.5
+    canvas.paint_next(30, 30, color=v2.COLOR_RED)
+    px = tuple(canvas.layer[30, 30])
+    # blended halfway between white background and red
+    assert abs(px[2] - (v2.COLOR_RED[2] + 255) // 2) <= 2
+
+
+def test_canvas_high_opacity_is_solid():
+    canvas = v2.Canvas(120, 90)
+    canvas.paint_next(30, 30, color=v2.COLOR_RED)
+    assert tuple(canvas.layer[30, 30]) == v2.COLOR_RED
+
+
+def test_canvas_draw_shape_rect_commits():
+    canvas = v2.Canvas(120, 90)
+    canvas.draw_shape(v2.TOOL_SHAPE_RECT, (10, 10), (60, 40),
+                      color=v2.COLOR_BLUE, brush=3)
+    assert tuple(canvas.layer[25, 10]) == v2.COLOR_BLUE
+
+
+def test_canvas_draw_shape_line_commits():
+    canvas = v2.Canvas(120, 90)
+    canvas.draw_shape(v2.TOOL_SHAPE_LINE, (0, 40), (100, 40),
+                      color=v2.COLOR_BLUE, brush=3)
+    assert tuple(canvas.layer[40, 50]) == v2.COLOR_BLUE
+
+
+def test_canvas_flood_fill_fills_region():
+    canvas = v2.Canvas(120, 90)
+    # close a square with a wall, then fill its interior
+    canvas.draw_shape(v2.TOOL_SHAPE_RECT, (10, 10), (40, 40),
+                      color=v2.COLOR_BLACK, brush=2)
+    canvas.flood_fill(20, 20, color=v2.COLOR_RED)
+    assert tuple(canvas.layer[20, 20]) == v2.COLOR_RED
+
+
+# ------------------------------------------------------------------ #
+# v2.1 - Sidebar stable selection                                    #
+# ------------------------------------------------------------------ #
+
+def _sidebar_ready():
+    s = v2.Sidebar()
+    s.build(400)
+    return s
+
+
+def test_sidebar_hit_outside_is_none():
+    s = _sidebar_ready()
+    assert s.hit(v2.SIDEBAR_WIDTH + 10, 200) is None
+
+
+def test_sidebar_hit_top_region_is_none():
+    s = _sidebar_ready()
+    assert s.hit(10, 20) is None  # above header top offset
+
+
+def test_sidebar_hit_finds_shape_button():
+    s = _sidebar_ready()
+    action, label, color, y1, y2 = s.hit(10, s.top + 1)
+    assert action == v2.TOOL_SHAPE_LINE
+
+
+def test_sidebar_hover_selects_after_frames():
+    s = _sidebar_ready()
+    chosen = None
+    for _ in range(v2.STABLE_HOVER_FRAMES + 1):
+        chosen = s.update((10, s.top + 1), 0.9, v2.HOVER)
+        if chosen is not None:
+            break
+    assert chosen == v2.TOOL_SHAPE_LINE
+
+
+def test_sidebar_pinch_selects_immediately():
+    s = _sidebar_ready()
+    chosen = s.update((10, s.top + 1), v2.PINCH_ON_RATIO * 0.5, v2.DRAW)
+    assert chosen == v2.TOOL_SHAPE_LINE
+
+
+def test_header_includes_random_color_button():
+    h = _header_ready()
+    # the RANDOM tool should be reachable through the top palette
+    found = any(tid == v2.TOOL_RANDOM for (tid, *_rest) in h.buttons)
+    assert found
