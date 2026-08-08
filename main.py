@@ -50,6 +50,10 @@ class AirCanvasApp:
         # Shape engine (Phase 2 of the v2 brief): anchor-drag-commit state.
         self.shapes = ShapeEngine()
 
+        # True while a free-hand stroke has painted at least one frame;
+        # used to push undo history once at the end of a stroke (Phase 4).
+        self._stroke_ongoing = False
+
         # Bookkeeping for drawing / composition.
         self._cursor = None
 
@@ -154,15 +158,22 @@ class AirCanvasApp:
             else:
                 eraser = (self.tool == config.TOOL_ERASER)
                 self.canvas.stroke(x, y, is_eraser=eraser)
+                self._stroke_ongoing = True
             self.gesture_name = "DRAW"
             return
 
         if gesture == Gesture.CLEAR:
             self.canvas.clear()
             self.canvas.reset_pointer()
+            self._stroke_ongoing = False
             self.gesture_name = "CLEAR (palm)"
             return
 
+        # Hand hover or any other gesture ends the current stroke: push one
+        # history snapshot so undo reverts the whole stroke, not a frame.
+        if self._stroke_ongoing:
+            self.canvas.push_stroke_history()
+            self._stroke_ongoing = False
         self.gesture_name = "HOVER"
         self.canvas.reset_pointer()
 
@@ -227,7 +238,13 @@ class AirCanvasApp:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1,
                     cv2.LINE_AA)
 
-        label = f"{self.gesture_name} | tool: {self.tool}"
+        shape_desc = ""
+        if self.shapes.tool != ShapeTool.NONE:
+            shape_desc = f"shape:{self.shapes.tool.name}"
+        parts = [self.gesture_name, f"tool: {self.tool}"]
+        if shape_desc:
+            parts.append(shape_desc)
+        label = " | ".join(parts)
         cv2.putText(frame, label, config.GESTURE_TEXT_POS,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     config.GESTURE_TEXT_COLOR, 1, cv2.LINE_AA)
@@ -282,6 +299,9 @@ class AirCanvasApp:
                     self.tracker._stabilizer.reset()
                     if self.shapes.anchor is not None:
                         self._commit_shape()
+                    if self._stroke_ongoing:
+                        self.canvas.push_stroke_history()
+                        self._stroke_ongoing = False
                     self.canvas.reset_pointer()
                     self.gesture_name = "NO HAND"
                 else:

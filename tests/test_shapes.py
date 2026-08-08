@@ -96,6 +96,66 @@ def test_shape_geometry_stays_in_bounds():
     assert np.any(layer != config.CANVAS_BG)   # drawn inside bounds
 
 
+# ------------------------------------------------------------------ #
+# Phase 3: full-canvas edge coverage                                  #
+# ------------------------------------------------------------------ #
+
+def test_layer_is_full_frame():
+    from canvas import Canvas
+    c = Canvas(640, 480)
+    assert c.layer.shape[:2] == (480, 640)
+    assert c.width == 640 and c.height == 480
+
+
+def test_bottom_row_and_right_column_drawable():
+    """Strokes must reach the last row and last column (Phase 3)."""
+    from canvas import Canvas
+    c = Canvas(640, 480)
+    c.stroke(638, 478)                 # within a few px of the bottom-right
+    mask = np.any(c.layer != config.CANVAS_BG, axis=-1)
+    assert mask[478, 638]
+    assert mask[477, 638]              # 2 px from the very edge
+
+
+def test_ui_hit_zones_match_config():
+    from main import AirCanvasApp
+    app = AirCanvasApp(model_path=config.MODEL_PATH)
+    from canvas import Canvas, Sidebar
+    app.canvas = Canvas(640, 480)
+    app.sidebar = Sidebar()            # width from config
+    # Inside sidebar -> suppressed.
+    assert app.inside_ui(5, 200) is True
+    # Inside header -> suppressed.
+    assert app.inside_ui(400, 5) is True
+    # Bottom row, right column -> drawable (outside every UI zone).
+    assert app.inside_ui(639, 479) is False
+    assert app.inside_ui(app.sidebar.width + 1, config.HEADER_HEIGHT + 1) \
+        is False
+    app.tracker.release()
+
+
+def test_freehand_stroke_pushes_history_once():
+    """A multi-frame free-hand stroke pushes exactly one undo snapshot."""
+    from canvas import Canvas
+    from main import AirCanvasApp
+    app = AirCanvasApp(model_path=config.MODEL_PATH)
+    app.canvas = Canvas(640, 480)
+    app.palette = None
+    app.sidebar = None
+    app.shapes.select(ShapeTool.NONE)   # freehand mode
+
+    # Draw several frames (simulating a connected stroke).
+    for i in range(1, 20):
+        app.handle_hand(Gesture.DRAW, _landmarks_at(0.2 + i * 0.02, 0.5),
+                        640, 480, i)
+    assert app._stroke_ongoing is True
+
+    # Leaving DRAW (hover) commits one history snapshot.
+    app.handle_hand(Gesture.NONE, _landmarks_at(0.5, 0.5), 640, 480, 20)
+    assert len(app.canvas._undo_stack) == 1
+    app.tracker.release()
+
+
 def test_app_shape_flow_end_to_end():
     """SELECT picks a shape; DRAW anchors+drags; leaving DRAW commits."""
     from canvas import Canvas
