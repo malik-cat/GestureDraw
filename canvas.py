@@ -134,7 +134,7 @@ class Canvas:
     def clear(self):
         """Save history, then empty the whiteboard."""
         self._push_history()
-        self.layer.fill(config.CANVAS_BG)
+        self.layer[:] = config.CANVAS_BG   # fill RGB channels, not a scalar
         self.last_point = None
 
     # ------------------------------------------------------------------ #

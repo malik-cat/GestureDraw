@@ -193,6 +193,14 @@ def test_undo_empty_returns_false():
     assert c.undo() is False
 
 
+def test_clear_accepts_bgr_tuple():
+    c = Canvas(320, 240)
+    c.stroke(10, 10)
+    c.clear()
+    assert drawn_pixels(c) == 0
+    assert tuple(c.layer[0, 0]) == config.CANVAS_BG
+
+
 # ------------------------------------------------------------------ #
 # UI hit-testing                                                     #
 # ------------------------------------------------------------------ #
