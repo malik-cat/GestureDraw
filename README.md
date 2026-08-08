@@ -15,6 +15,10 @@ GestureDraw transforms hand gestures captured by a webcam into a virtual
 whiteboard. Point, draw, erase, and snap together shapes such as lines,
 rectangles, circles, triangles and stars — all live, on a mirrored video feed.
 
+<p align="center">
+  <img src="screenshots/air_canvas_demo.png" alt="GestureDraw running — mirrored webcam feed with the two-row palette and a live hand gesture" width="720">
+</p>
+
 ---
 
 ## ✨ Features
