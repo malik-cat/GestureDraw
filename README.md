@@ -12,39 +12,60 @@
 **Author:** [Mohammad Liaquat Ali](https://github.com/malik-cat)
 
 GestureDraw turns hand gestures captured by a webcam into a virtual
-whiteboard. Point with your index finger to draw, raise index + middle to
-pick tools from the **top palette** or the new **left sidebar**, clear the
-board with an open palm, undo mistakes, resize your brush, and export your
-work as a PNG — all live, on a mirrored video feed.
+whiteboard. Point with your index finger to draw, pinch to select tools and
+anchor shapes, fill closed regions, switch to random colours or random
+shapes, tune brush size / opacity / smoothing in real time, and export your
+work as a PNG — all live, on a **full-screen mirrored** video feed.
+
+The **v2.1 professional build** is a single-file, production-tuned app
+(`gesture_draw_v2.py`) with a top colour palette, a left tool sidebar, an
+interpolated + dropout-bridging stroke engine, real alpha-blended
+highlighters, and deterministic random tools.
 
 <p align="center">
-  <img src="screenshots/air_canvas_demo.png" alt="GestureDraw running — mirrored webcam feed with the top palette and a live hand gesture" width="720">
+  <img src="screenshots/air_canvas_v2.png" alt="GestureDraw v2.1 — full-screen mirrored feed, top palette, left sidebar, shapes and random-colour strokes" width="720">
 </p>
 
 ---
 
 ## ✨ Features
 
-- **Full-canvas drawing** — every pixel on screen is drawable, edge to edge.
-  Strokes are only suppressed while your fingertip is inside a UI panel.
-- **Gesture debouncing with hysteresis** — a gesture enters in only 2
-  consecutive frames, but once active it takes 5 consecutive different
-  frames to change. Drawing starts without noticeable lag, and a 1-3 frame
-  flicker of the hand never cuts an in-progress stroke in the middle.
+- **Full-canvas drawing** — every pixel on screen is drawable, edge to
+  edge; strokes are suppressed only while your fingertip is inside a UI
+  panel.
+- **Interpolated, zero-drop strokes** — each new fingertip point is
+  connected to the previous one with `cv2.line()` so skipped MediaPipe
+  frames never crack a line. If the hand disappears mid-stroke, up to
+  `BRIDGE_FRAMES` (4) frames are bridged by **motion-vector
+  extrapolation** before the stroke is cut.
+- **Stable tool selection** — a tool fires when it is hovered for
+  `STABLE_HOVER_FRAMES` (15 ≈ 0.5 s) consecutive frames **or** when a
+  pinch-click releases inside the panel.
 - **Three gestures:**
-  - `SELECT` — index + middle raised → move the cursor / click a UI tool.
-  - `DRAW` — index raised only → free-hand draw.
-  - `CLEAR` — all five fingers raised → wipe the canvas.
-- **Interactive top palette** — `RED` `GREEN` `BLUE` `ERASER` `CLEAR`.
-- **Left sidebar** — same look, on the left edge: colours, eraser, clear,
-  undo, save, and brush `+/−`. Active tool is highlighted in yellow.
-- **Undo / Redo** with keyboard shortcuts (`u` / `y`) and the sidebar.
-- **Save / Export** — write just the drawing to a timestamped PNG in
-  `exports/` with `s` or the sidebar `SAVE` button.
-- **Brush size control** — `+` / `−` and sidebar buttons.
-- **On-screen feedback** — the recognized gesture name, active tool, brush
-  size, and a live camera indicator are always visible.
-- **First-run privacy notice** — appears once on first launch.
+  - `DRAW` — index raised only → free-hand draw (pen = fingertip).
+  - `HOVER / SELECT` — index + middle raised → move the cursor / pick tools.
+  - `PINCH` — thumb + index together → click a tool, **anchor a shape**,
+    or **flood-fill** a region.
+- **Random colour tool** — `RANDOM` (top palette / sidebar / `r`) pulls a
+  fresh, vivid colour from a **golden-angle HSV wheel** for every new
+  stroke.
+- **Shape engine** — `LINE` `RECT` `CIRCLE` `TRIANGLE` `STAR` with an
+  anchor → drag → live preview → release commit workflow; `RANDOM SHAPE`
+  (`g`) picks a random shape per commit.
+- **BUCKET FILL** — pinch-tap inside a closed region to fill it in the
+  current colour.
+- **Two erasers** — a large **stroke eraser** and a **FINE (precision)
+  eraser** for pixel-level touch-ups.
+- **Drawing parameters** — brush thickness (`+` / `−`, sidebar buttons),
+  opacity (`[` / `]` — a real alpha blend, solid pen → translucent
+  highlighter), and moving-average landmark **smoothing** (`t`), all
+  tunable live.
+- **Guarded CLEAR ALL** — the first press arms it; a second press within
+  `CLEAR_CONFIRM_S` (1 s) really wipes the canvas, so you never lose work
+  to a stray pinch.
+- **Undo** with `u`, **Save/Export** a timestamped PNG of just the drawing
+  to `exports/` with `s`, **full-screen toggle** with `f`, **FPS meter and
+  live HUD** in the corner.
 - **Clean exit** — `q` releases the camera and closes every window.
 
 ---
@@ -94,91 +115,109 @@ Or the **v1 modular build**:
 python main.py
 ```
 
-The v2 window **GestureDraw v2 – Air Canvas** opens with a redesigned header
-toolbar (`BLUE` `GREEN` `RED` `ERASER` `CLEAR ALL`), a live FPS meter, and
-interpolated stroke drawing for lag-free, gap-free lines. Raise your hand
-and start drawing; press `q` to quit.
+The window **GestureDraw v2 – Air Canvas** opens **full screen** in a
+mirrored selfie view (the left/right hand feel natural). It shows the top
+palette (`BLUE` `GREEN` `RED` `RANDOM` `ERASE` `CLEAR ALL`), the left tool
+sidebar, and a live FPS/HUD readout. Raise your hand and start drawing;
+press `q` to quit, `f` to toggle windowed/full screen.
 
 > **Model file:** if `hand_landmarker.task` is missing, download it from
 > [Google's MediaPipe models](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task)
 > and place it in the project root.
 >
-> `air_canvas.py` still works — it is now a thin wrapper that launches the
-> same app as `main.py`.
+> `main.py` / `air_canvas.py` still work — they are the earlier **v1
+> modular build** and are kept for reference; `gesture_draw_v2.py` is the
+> recommended, full-featured build.
 
 ---
 
 ## 🖐️ How to Use
 
-| Gesture                    | Action                                   |
-|----------------------------|------------------------------------------|
-| Index + middle fingers up  | Move cursor / click a palette sidebar tool |
-| Index finger up only      | Free-hand draw                           |
-| All five fingers up        | Clear the canvas                          |
-| Fist / any other hand shape| Hover — no drawing                       |
-| Hand out of frame          | New stroke starts on return              |
+| Gesture                       | Action                                     |
+|-------------------------------|--------------------------------------------|
+| Index + middle fingers up     | Move the cursor / hover a tool (`HOVER`)    |
+| Index finger up only          | Free-hand draw (`DRAW`)                    |
+| Thumb + index pinch (press)   | Click a tool, **anchor a shape**, or start a fill |
+| Thumb + index pinch (release) | Commit the shape / perform the fill        |
+| Hand out of frame             | Stroke continues briefly (bridged), then a new stroke starts |
 
-### Sidebar (left edge)
+### Top palette & left sidebar
 
-Hover your `SELECT` gesture (index + middle up) over a sidebar entry and it
-activates instantly:
+Hover a button for ~0.5 s or pinch-click it to activate — the active tool
+is outlined in yellow:
 
 ```
-RED    GREEN   BLUE    ERASER  CLEAR
-LINE   RECT    CIRCLE  TRIANGLE STAR
-DRAW   UNDO    SAVE    BRUSH+  BRUSH−
+Top palette:  BLUE   GREEN   RED   RANDOM   ERASE   CLEAR ALL
+Left sidebar: LINE   RECT    CIRCLE  TRIANGLE  STAR
+              SHAPE? FILL    ERASE   FINE     BRUSH+   BRUSH−
+              OPAC+  OPAC−   SMOOTH
 ```
 
-### Drawing shapes
+`RANDOM` recolours every new stroke from the golden-angle wheel; `SHAPE?`
+commits a random shape each time you draw; `FILL` bucket-fills a closed
+region; `FINE` is the precision eraser; `BRUSH±`, `OPAC±` and `SMOOTH`
+tune the drawing parameters live.
 
-1. Point (`SELECT`) at a shape tool — `LINE`, `RECT`, `CIRCLE`, `TRIANGLE`,
-   or `STAR` — in the sidebar or the top palette, then raise just your index
-   finger (`DRAW`).
-2. The first `DRAW` fingertip point **anchors** the shape.
-3. Drag your finger — a live **yellow** outline previews the shape between the
-   anchor and your fingertip.
-4. Change gesture (or take your hand out of frame) to **commit** the shape in
-   the current color/brush.
+### Drawing a shape
 
-`DRAW` (in the list above) or `0` on the keyboard returns to free-hand
-sketching; the shape tool stays selected so you can draw several in a row.
+1. Pick a shape tool (`LINE` `RECT` `CIRCLE` `TRIANGLE` `STAR` or
+   `SHAPE?`) from the sidebar, or press `1`–`5` / `g`.
+2. **Pinch** (thumb + index) on the canvas to **anchor** the shape — a
+   live translucent preview follows your fingertip.
+3. Drag your finger to size it, then **release the pinch** to **commit**
+   with the current colour and brush.
+   A quick tap (under `FINGER_TAP_DIST` px) cancels instead of committing.
 
 ---
 
-## 🚀 The v2 Production Build (`gesture_draw_v2.py`)
+## 🚀 The v2.1 Professional Build (`gesture_draw_v2.py`)
 
 A single-file, production-tuned implementation addressing the reported
-"broken lines" and "unresponsive toolbar" issues:
+"broken lines", "unresponsive toolbar" and "mirrored gestures" issues, then
+extended with the professional feature set:
 
 **Phase 1 — Smooth, continuous lines**
-- `HandLandmarker` confidence raised to **0.8/0.8** (`min_detection_confidence`,
-  `min_tracking_confidence`) so brief occlusion no longer drops the hand.
-- The tracker runs in **VIDEO mode** (frame-to-frame tracking) instead of a
-  full re-detect every frame, offsetting the confidence latency.
-- **Line interpolation** — the previous fingertip `(xp, yp)` is connected to
-  the current `(xc, yc)` with `cv2.line()` every frame. A single skipped
-  frame now *continues* the stroke instead of cracking it into dots.
-- **FPS meter** in the corner + pacing that caps the loop at `TARGET_FPS`
-  (30) for a steady, professional feel.
+- `HandLandmarker` confidence raised to **0.8/0.8/0.8** so brief occlusion
+  no longer drops the hand.
+- **VIDEO mode** (frame-to-frame tracking) instead of a full re-detect
+  every frame, offsetting the confidence latency.
+- **Line interpolation** — the previous fingertip is connected to the
+  current one with `cv2.line()` every frame.
+- **Zero-drop bridging** — if the hand vanishes mid-stroke, up to
+  `BRIDGE_FRAMES` (4) missing frames are filled by motion-vector
+  extrapolation (`predict_bridged_point`) so fast flicks and occlusions
+  never fragment a stroke; it is cut only after `MAX_STROKE_LOST_FRAMES`.
+- **Mirrored selfie view** — the feed is flipped so your right hand draws
+  on the right.
+- **FPS meter** + pacing that caps the loop at `TARGET_FPS` (30).
 
-**Phase 2 — Clear, reliable toolbar**
-- Header redesigned over y = 0..100 with labelled buttons
-  `[BLUE] [GREEN] [RED] [ERASER] [CLEAR ALL]`; the active tool is outlined
-  in thick yellow.
-- **Stable selection** — a tool only fires after the cursor hovers it for
-  `STABLE_HOVER_FRAMES` (15 ≈ 0.5 s) consecutive frames **or** a pinch-click
-  fires inside the header (pinch is preferred for accuracy).
+**Phase 2 — Professional toolbar (top palette + left sidebar)**
+- Header: `[BLUE] [GREEN] [RED] [RANDOM] [ERASE] [CLEAR ALL]`.
+- Left sidebar: shapes, `SHAPE?`, `FILL`, erasers and parameter buttons.
+- **Stable selection** — fire after `STABLE_HOVER_FRAMES` (≈0.5 s) hover
+  *or* instantly on a pinch release inside the panel.
+- **Guarded CLEAR ALL** — first press arms, second within
+  `CLEAR_CONFIRM_S` wipes the canvas.
 
 **Phase 3 — Precise gestures**
-- `DRAW`: index tip clearly above its PIP while the middle is folded (pen =
-  landmark 8).
-- `SELECT/HOVER`: index **and** middle extended → cursor is the midpoint of
-  landmarks 8 and 12 (stable two-finger cursor).
-- `CLICK`: thumb (4) + index (8) pinch ratio below `PINCH_ON_RATIO`,
-  normalised by hand size, only honoured inside the header strip.
+- `DRAW`: index tip clearly above its PIP while middle folded.
+- `HOVER`: index + middle extended → sticky two-finger cursor.
+- `PINCH`: thumb (4) + index (8) ratio below `PINCH_ON_RATIO`, normalised
+  by hand size — click tools, anchor shapes, trigger fills.
 
-All v2 pure logic is unit-tested in `tests/test_gesture_draw_v2.py`
-(camera-free).
+**Phase 4 — Professional drawing parameters**
+- brush `+`/`−`, opacity `[`/`]` (real alpha blend → highlighter), and
+  moving-average landmark smoothing `t` — all also available as sidebar
+  buttons `BRUSH±`, `OPAC±`, `SMOOTH`.
+
+**Phase 5 — Deterministic & random tools**
+- `RANDOM` — golden-angle HSV wheel colours every new stroke differently.
+- `SHAPE?` — anchor-drag-release commits a random one of
+  LINE/RECT/CIRCLE/TRIANGLE/STAR.
+- `FILL` — bucket-fill a connected region on pinch release.
+
+All v2 pure logic is unit-tested (camera-free) in
+`tests/test_gesture_draw_v2.py`; the full suite runs in CI.
 
 ---
 
@@ -187,16 +226,17 @@ All v2 pure logic is unit-tested in `tests/test_gesture_draw_v2.py`
 | Key            | Action                   |
 |----------------|--------------------------|
 | `q`            | Quit                     |
-| `r` / `g` / `b`| Red / Green / Blue pen   |
-| `e`            | Eraser                   |
-| `c`            | Clear canvas             |
-| `u` / `z`      | Undo                     |
-| `y`            | Redo                     |
+| `u`            | Undo last stroke/shape/fill |
+| `c`            | Clear canvas (guarded — press twice) |
 | `s`            | Save / export PNG        |
+| `f`            | Toggle full screen       |
+| `r`            | Activate RANDOM colour   |
+| `g`            | Activate RANDOM shape    |
+| `t`            | Toggle landmark smoothing |
 | `1`–`5`        | LINE / RECT / CIRCLE / TRIANGLE / STAR |
-| `0`            | Return to free-hand draw |
 | `+` / `=`      | Increase brush size      |
 | `−`            | Decrease brush size      |
+| `]` / `[`      | Increase / decrease opacity |
 
 ---
 
@@ -204,15 +244,18 @@ All v2 pure logic is unit-tested in `tests/test_gesture_draw_v2.py`
 
 ```
 GestureDraw/
-├── main.py                # Application loop (entry point)
-├── air_canvas.py          # Deprecated → thin wrapper around main.py
-├── frame_capture.py       # Mirrored webcam capture pipeline
-├── hand_tracker.py        # MediaPipe Tasks tracking + gesture debouncer
-├── canvas.py              # Drawing layer, stroke logic, undo/redo, UI
-├── config.py              # All thresholds, layouts, colours, shortcuts
-├── tests/                 # Camera-free unit tests (pytest)
-├── .github/workflows/     # CI: ruff + pytest + py_compile
-├── hand_landmarker.task   # MediaPipe hand landmark model
+├── gesture_draw_v2.py      # ★ Recommended build (v2.1, single-file)
+├── main.py                 # v1 modular build (entry point, reference)
+├── air_canvas.py           # Deprecated → thin wrapper around main.py
+├── frame_capture.py        # Mirrored webcam capture pipeline
+├── hand_tracker.py         # MediaPipe Tasks tracking + gesture debouncer
+├── canvas.py               # Drawing layer, stroke logic, undo/redo, UI
+├── config.py               # All thresholds, layouts, colours, shortcuts
+├── shapes.py               # Shape geometry (LINE/RECT/CIRCLE/TRIANGLE/STAR)
+├── tests/                  # Camera-free unit tests (pytest)
+├── screenshots/            # README previews
+├── .github/workflows/      # CI: ruff + pytest + py_compile
+├── hand_landmarker.task    # MediaPipe hand landmark model
 ├── requirements.txt
 ├── CONTRIBUTING.md
 ├── README.md
@@ -278,7 +321,7 @@ dedicated keyboard-only mode is planned — tracked in
 ## 🧪 Development
 
 ```bash
-python -m pytest tests/     # 20 unit tests, no camera needed
+python -m pytest tests/     # 69 unit tests, no camera needed
 ruff check .                # linter
 ```
 
@@ -287,6 +330,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer setup.
 ---
 
 ## 📜 Changelog
+
+### v2.1.0 — Professional build
+
+- **Random colour & shapes:** `RANDOM` recolours every new stroke from a
+  golden-angle HSV wheel; `RANDOM SHAPE` (`g`) commits a random
+  LINE/RECT/CIRCLE/TRIANGLE/STAR per anchor-drag-release.
+- **Professional toolbar:** new left sidebar holds shapes, bucket fill,
+  fine + stroke erasers and parameter buttons, all sharing the top
+  palette's stable hover/pinch selection.
+- **Flood fill & guarded clear:** `FILL` bucket-fills a connected region;
+  `CLEAR ALL` needs a confirming second tap.
+- **Params:** brush `+/-`, opacity `[`/`]` (alpha-blend highlighter) and
+  landmark smoothing `t`, each with keyboard + sidebar control.
+- **Zero-drop strokes:** up to `BRIDGE_FRAMES` (4) dropped frames are
+  bridged by motion-vector extrapolation before the line is cut.
+- 69 camera-free unit tests (17 new), ruff clean, mirrored full-screen view.
 
 ### v0.2.0
 
