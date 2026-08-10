@@ -377,8 +377,9 @@ class Canvas:
             cv2.fillPoly(tmp, [poly], color)
         else:
             cv2.polylines(tmp, [poly], True, color, brush, cv2.LINE_AA)
-        self._blend(tmp)
+        # Snapshot BEFORE baking, so one undo removes the whole shape.
         self.push_history()
+        self._blend(tmp)
 
     def preview_shape(self, frame, shape_id: str, p0, p1,
                       color=None, brush=None):
@@ -872,12 +873,14 @@ class GestureDrawApp:
     # --------------------------------------------------------------------- #
     def _stroke_workflow(self, cursor, gc):
         if gc.mode == DRAW:
+            if self.canvas.prev_point is None:
+                # Snapshot BEFORE the stroke paints, so one undo removes
+                # the whole stroke (not a later no-op).
+                self.canvas.push_history()
             self._maybe_new_stroke_color()
             self.canvas.paint_next(cursor[0], cursor[1],
                                    color=self._paint_color())
         else:
-            if self.canvas.prev_point is not None:
-                self.canvas.push_history()
             self.canvas.reset_stroke()
 
     def _maybe_new_stroke_color(self):
@@ -1025,6 +1028,16 @@ class GestureDrawApp:
             self._apply_tool(TOOL_RANDOM)
         elif key == KEY_RANDOM_SHAPE_CYCLE:
             self._apply_tool(TOOL_RANDOM_SHAPE)
+        elif key == ord("1"):
+            self._apply_tool(TOOL_SHAPE_LINE)
+        elif key == ord("2"):
+            self._apply_tool(TOOL_SHAPE_RECT)
+        elif key == ord("3"):
+            self._apply_tool(TOOL_SHAPE_CIRCLE)
+        elif key == ord("4"):
+            self._apply_tool(TOOL_SHAPE_TRIANGLE)
+        elif key == ord("5"):
+            self._apply_tool(TOOL_SHAPE_STAR)
         elif key == KEY_FULLSCREEN:
             self._toggle_fullscreen()
         return False
