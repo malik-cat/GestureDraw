@@ -328,7 +328,7 @@ dedicated keyboard-only mode is planned — tracked in
 ## 🧪 Development
 
 ```bash
-python -m pytest tests/     # 69 unit tests, no camera needed
+python -m pytest tests/     # 75 unit tests, no camera needed
 ruff check .                # linter
 ```
 
@@ -359,6 +359,22 @@ go run github.com/slsa-framework/slsa-verifier/cli/cmd/slsa-verifier@latest \
 ---
 
 ## 📜 Changelog
+
+### v2.1.1 — Bug fixes
+
+- **Undo no longer needs two presses.** Both builds snapshot the canvas
+  *before* a stroke/shape is baked, so one `u` removes the whole latest
+  stroke or committed shape. Fixes the undo off-by-one in `main.py` and
+  `gesture_draw_v2.py`.
+- **Shape tools are now selectable with `1`–`5`** in the v2.1 build
+  (LINE/RECT/CIRCLE/TRIANGLE/STAR), matching the documented keyboard map.
+- **No camera-handle leak on start-up failure.** If the webcam cannot be
+  opened, the MediaPipe tracker is released before the app exits instead of
+  leaking on the error path.
+- 6 new regression tests (75 total camera-free), ruff clean.
+- Keyboard map is now consistent **in both builds**: `1`–`5` pick shapes
+  (`main.py` already had them), and the v1/v2 shortcut tables agree with the
+  README.
 
 ### v2.1.0 — Professional build
 
