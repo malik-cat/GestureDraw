@@ -156,9 +156,13 @@ class AirCanvasApp:
             if self.inside_ui(x, y):
                 self.canvas.reset_pointer()
             else:
+                if not self._stroke_ongoing:
+                    # Snapshot the layer BEFORE the stroke starts, so one
+                    # undo removes the whole stroke (not a later no-op).
+                    self.canvas.push_stroke_history()
+                    self._stroke_ongoing = True
                 eraser = (self.tool == config.TOOL_ERASER)
                 self.canvas.stroke(x, y, is_eraser=eraser)
-                self._stroke_ongoing = True
             self.gesture_name = "DRAW"
             return
 
@@ -169,11 +173,10 @@ class AirCanvasApp:
             self.gesture_name = "CLEAR (palm)"
             return
 
-        # Hand hover or any other gesture ends the current stroke: push one
-        # history snapshot so undo reverts the whole stroke, not a frame.
-        if self._stroke_ongoing:
-            self.canvas.push_stroke_history()
-            self._stroke_ongoing = False
+        # Hand hover or any other gesture ends the current stroke. The undo
+        # snapshot was already taken when the stroke started, so undo can
+        # revert the whole stroke, not a frame.
+        self._stroke_ongoing = False
         self.gesture_name = "HOVER"
         self.canvas.reset_pointer()
 
@@ -206,11 +209,12 @@ class AirCanvasApp:
         if not committed:
             return
         tool, anchor, current = committed
+        # Snapshot BEFORE baking, so one undo removes the whole shape.
+        self.canvas.push_stroke_history()
         draw_shape(self.canvas.layer, tool, anchor, current,
                    self.canvas.width, self.canvas.height,
                    color=self.canvas.current_color,
                    thickness=max(1, self.canvas.brush_size))
-        self.canvas.push_stroke_history()
         self.canvas.reset_pointer()
 
     def _draw_shape_preview(self, frame):
@@ -264,6 +268,7 @@ class AirCanvasApp:
         try:
             camera = FrameSource(self.camera_source)
         except RuntimeError as exc:
+            self.tracker.release()
             print(f"\nERROR: {exc}\nClose other apps using the camera and try "
                   "again.")
             return
@@ -272,6 +277,7 @@ class AirCanvasApp:
         if first_frame is None:
             print("ERROR: could not capture a frame from the camera.")
             camera.release()
+            self.tracker.release()
             return
 
         height, width = first_frame.shape[:2]
@@ -300,7 +306,6 @@ class AirCanvasApp:
                     if self.shapes.anchor is not None:
                         self._commit_shape()
                     if self._stroke_ongoing:
-                        self.canvas.push_stroke_history()
                         self._stroke_ongoing = False
                     self.canvas.reset_pointer()
                     self.gesture_name = "NO HAND"
