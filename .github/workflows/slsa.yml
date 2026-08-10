@@ -1,0 +1,62 @@
+name: SLSA provenance
+
+# Generates SLSA provenance (SLSA v1.0 level 3) for release artifacts
+# whenever a release tag (vX.Y.Z) is pushed. The provenance is signed
+# with a key held by GitHub's OIDC and can be verified with
+# `slsa-verifier verify-artifact ...`.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must exist)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write        # needed to sign the provenance with the OIDC key
+  contents: write        # needed to upload provenance + assets to the release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf dist/gesturedraw.tar.gz \
+            gesture_draw_v2.py README.md LICENSE requirements.txt \
+            hand_landmarker.task CONTRIBUTING.md
+          cd dist
+          python -c "import shutil; shutil.make_archive('gesturedraw', 'zip', '..')"
+
+      - name: Upload build artifacts for the SLSA job
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesturedraw-release
+          path: dist/
+
+      - name: Generate subject hashes (base64)
+        id: hash
+        shell: bash
+        run: |
+          echo "hashes=$(sha256sum dist/gesturedraw.tar.gz dist/gesturedraw.zip | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: true

@@ -7,6 +7,9 @@
   <img src="https://img.shields.io/badge/OpenCV-4.8%2B-5C3EE8?logo=opencv&logoColor=white">
   <img src="https://img.shields.io/badge/MediaPipe-1.0%2B-009688?logo=google&logoColor=white">
   <img src="https://img.shields.io/badge/License-MIT-blue">
+  <a href="https://github.com/slsa-framework/slsa-github-generator">
+    <img src="https://slsa.dev/images/slsa-badge.svg" alt="SLSA 3" width="60">
+  </a>
 </p>
 
 **Author:** [Mohammad Liaquat Ali](https://github.com/malik-cat)
@@ -23,7 +26,11 @@ interpolated + dropout-bridging stroke engine, real alpha-blended
 highlighters, and deterministic random tools.
 
 <p align="center">
-  <img src="screenshots/air_canvas_v2.png" alt="GestureDraw v2.1 — full-screen mirrored feed, top palette, left sidebar, shapes and random-colour strokes" width="720">
+  <img src="screenshots/air_canvas_clean.png" alt="GestureDraw v2.1 software — full-screen mirrored feed with top palette and left sidebar, clean canvas" width="720">
+</p>
+
+<p align="center">
+  <img src="screenshots/air_canvas_v2.png" alt="GestureDraw v2.1 in action — mirrored feed, shapes and random-colour strokes on the canvas" width="720">
 </p>
 
 ---
@@ -326,6 +333,28 @@ ruff check .                # linter
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer setup.
+
+---
+
+## 🔐 Supply-chain security (SLSA)
+
+Release artifacts are built with **SLSA 3 provenance** using the official
+[slsa-github-generator](https://github.com/slsa-framework/slsa-github-generator).
+Pushing a `vX.Y.Z` tag triggers `.github/workflows/slsa.yml`, which builds
+the tarball/zip, hashes them, and signs an attestation with GitHub's OIDC
+key. Anyone can verify a downloaded artifact matches this exact repository:
+
+```bash
+go run github.com/slsa-framework/slsa-verifier/cli/cmd/slsa-verifier@latest \
+  verify-artifact dist/gesturedraw.tar.gz \
+  --provenance-path dist/gesturedraw.intoto.jsonl \
+  --source-uri github.com/malik-cat/GestureDraw
+```
+
+> **Note:** SLSA guarantees *provenance and integrity* of builds — it does
+> not restrict who can clone a **public** repository. For access control
+> you would make the repo private; SLSA ensures that any artifact you
+> publish genuinely came from your code.
 
 ---
 
