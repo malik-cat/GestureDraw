@@ -235,3 +235,82 @@ def test_palette_hit_test():
     p.draw(dummy, config.TOOL_RED)
     assert p.hit_test(5, 5) == config.TOOL_RED
     assert p.hit_test(300, 300) is None     # below the header
+
+
+# ------------------------------------------------------------------ #
+# App-level undo regression (one keypress must remove a whole stroke) #
+# ------------------------------------------------------------------ #
+
+def _index_tip_at(nx, ny):
+    """21 landmarks whose index tip (id 8) sits at normalised (nx, ny)."""
+    lms = [Lm(0.5, 0.5)] * 21
+    lms[8] = Lm(nx, ny)
+    return lms
+
+
+def _app_with_canvas():
+    """A stripped app: full-frame canvas, no UI panels, free-hand mode."""
+    from main import AirCanvasApp
+    app = AirCanvasApp(model_path=config.MODEL_PATH)
+    app.canvas = Canvas(640, 480)
+    app.palette = None
+    app.sidebar = None
+    return app
+
+
+def test_first_undo_removes_whole_latest_freehand_stroke():
+    """Regression: 'u' once must revert the most recent stroke, not require
+    two presses to see any change."""
+    app = _app_with_canvas()
+    # Stroke A (a connected horizontal line).
+    for i in range(1, 30):
+        app.handle_hand(Gesture.DRAW, _index_tip_at(0.1 + i * 0.01, 0.5),
+                        640, 480, i)
+    app.handle_hand(Gesture.NONE, _index_tip_at(0.5, 0.5), 640, 480, 60)
+    pix_after_a = drawn_pixels(app.canvas)
+    assert pix_after_a > 0
+
+    # Stroke B at a different row.
+    for i in range(1, 30):
+        app.handle_hand(Gesture.DRAW, _index_tip_at(0.1 + i * 0.01, 0.7),
+                        640, 480, i)
+    app.handle_hand(Gesture.NONE, _index_tip_at(0.5, 0.5), 640, 480, 60)
+
+    assert app.canvas.undo() is True
+    assert drawn_pixels(app.canvas) == pix_after_a
+    app.tracker.release()
+
+
+def test_first_undo_removes_committed_shape():
+    """Regression: one undo must take a committed shape off the canvas
+    (not require two presses to see any change)."""
+    app = _app_with_canvas()
+    app.apply_tool(config.TOOL_RECT)
+    # Anchor + drag + leave DRAW = commit a rect.
+    app.handle_hand(Gesture.DRAW, _index_tip_at(0.5, 0.5), 640, 480, 1)
+    app.handle_hand(Gesture.DRAW, _index_tip_at(0.75, 0.5), 640, 480, 2)
+    app.handle_hand(Gesture.NONE, _index_tip_at(0.5, 0.5), 640, 480, 3)
+    assert drawn_pixels(app.canvas) > 0
+
+    assert app.canvas.undo() is True
+    assert drawn_pixels(app.canvas) == 0
+    app.tracker.release()
+
+
+def test_camera_open_failure_releases_tracker(monkeypatch):
+    """Regression: if the webcam cannot be opened, the MediaPipe handle
+    must still be released (no resource leak on the error path)."""
+    import main
+    from main import AirCanvasApp
+    app = AirCanvasApp(model_path=config.MODEL_PATH)
+    released = []
+    app.tracker.release = lambda: released.append(True)
+
+    class FailingSource:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("camera in use")
+
+    monkeypatch.setattr(main, "FrameSource", FailingSource)
+    app.run()
+    assert released, "tracker.release() must be called when the camera fails"
+    app.tracker = None
