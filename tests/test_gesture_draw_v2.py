@@ -335,3 +335,83 @@ def test_header_includes_random_color_button():
     # the RANDOM tool should be reachable through the top palette
     found = any(tid == v2.TOOL_RANDOM for (tid, *_rest) in h.buttons)
     assert found
+
+
+# ------------------------------------------------------------------ #
+# Bug-fix regressions (v2.1 professional build)                       #
+# ------------------------------------------------------------------ #
+
+def _v2_app():
+    app = v2.GestureDrawApp()
+    app.canvas = v2.Canvas(640, 480)
+    return app
+
+
+def _v2_drawn(canvas):
+    """Number of v2 canvas pixels that differ from the white background."""
+    mask = np.any(canvas.layer != v2.CANVAS_BG, axis=-1)
+    return int(mask.sum())
+
+
+def test_v2_first_undo_removes_latest_stroke():
+    """Regression: one undo must remove the whole latest free-hand stroke
+    (matching v1), not require two presses to see any change."""
+    app = _v2_app()
+    app.tool = v2.TOOL_RED
+    try:
+        for i in range(1, 40):
+            app._stroke_workflow((30 + i * 4, 100), v2.Gesture(v2.DRAW, 0.9))
+        app._stroke_workflow((100, 100), v2.Gesture(v2.NONE, 0.9))
+        pix_a = _v2_drawn(app.canvas)
+        assert pix_a > 0
+
+        for i in range(1, 40):
+            app._stroke_workflow((30 + i * 4, 200), v2.Gesture(v2.DRAW, 0.9))
+        app._stroke_workflow((100, 200), v2.Gesture(v2.NONE, 0.9))
+
+        assert app.canvas.undo() is True
+        assert _v2_drawn(app.canvas) == pix_a
+    finally:
+        app.tracker.release()
+
+
+def test_v2_first_undo_removes_committed_shape():
+    """Regression: one undo must remove a committed shape, not a no-op."""
+    app = _v2_app()
+    app.tool = v2.TOOL_SHAPE_RECT
+    app._pinch = False
+    app._pinch_prev = False
+
+    def step(pinch, pos):
+        app._pinch_prev = app._pinch
+        app._pinch = pinch
+        app._shape_workflow(pos, v2.Gesture(v2.HOVER, 0.1 if pinch else 0.9))
+
+    try:
+        step(True, (50, 50))      # press  -> anchor
+        step(True, (200, 150))    # drag   -> preview
+        step(False, (200, 150))   # release-> commit
+
+        assert _v2_drawn(app.canvas) > 0
+        assert app.canvas.undo() is True
+        assert _v2_drawn(app.canvas) == 0
+    finally:
+        app.tracker.release()
+
+
+def test_v2_keyboard_selects_shape_tools():
+    """Regression: keys 1-5 must pick LINE/RECT/CIRCLE/TRIANGLE/STAR, as
+    documented in the README keyboard-shortcuts table."""
+    app = v2.GestureDrawApp()
+    try:
+        for key, tool in [
+            (ord("1"), v2.TOOL_SHAPE_LINE),
+            (ord("2"), v2.TOOL_SHAPE_RECT),
+            (ord("3"), v2.TOOL_SHAPE_CIRCLE),
+            (ord("4"), v2.TOOL_SHAPE_TRIANGLE),
+            (ord("5"), v2.TOOL_SHAPE_STAR),
+        ]:
+            app._keyboard(key)
+            assert app.tool == tool
+    finally:
+        app.tracker.release()
